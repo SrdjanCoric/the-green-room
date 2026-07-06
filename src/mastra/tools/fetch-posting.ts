@@ -155,7 +155,7 @@ export async function fetchPostingText(
 }
 
 /** Build an undici dispatcher whose connector only ever resolves to the pre-validated IP. */
-function pinnedDispatcher(address: string): Agent {
+export function pinnedDispatcher(address: string): Agent {
   const family = isIP(address) === 6 ? 6 : 4;
   const lookup: LookupFunction = (_hostname, lookupOptions, callback) => {
     if (typeof lookupOptions === 'object' && lookupOptions !== null && lookupOptions.all) {
@@ -303,9 +303,14 @@ function isGlobalIpv6(ip: string): boolean {
   if (embedded !== null) return isGlobalIpv4(intToIpv4(embedded));
 
   const first = hextets[0];
+  const second = hextets[1];
   if ((first & 0xffc0) === 0xfe80) return false; // link-local fe80::/10
+  if ((first & 0xffc0) === 0xfec0) return false; // deprecated site-local fec0::/10
   if ((first & 0xfe00) === 0xfc00) return false; // unique local fc00::/7
   if ((first & 0xff00) === 0xff00) return false; // multicast ff00::/8
+  if (first === 0x0100 && hextets.slice(1, 4).every((part) => part === 0)) return false; // discard-only 100::/64
+  if (first === 0x2001 && second >= 0x0000 && second <= 0x01ff) return false; // IETF special-purpose 2001::/23
+  if (first === 0x2001 && second === 0x0db8) return false; // documentation 2001:db8::/32
   return true;
 }
 
