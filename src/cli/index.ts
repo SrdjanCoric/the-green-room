@@ -3,6 +3,7 @@ import * as p from '@clack/prompts';
 import { Command } from 'commander';
 
 import {
+  formatCompanyBrief,
   formatCandidateProfile,
   formatRoleContext,
   ingestCv,
@@ -68,9 +69,10 @@ program
       p.intro('interview-coach');
 
       let postingText: string | undefined;
+      let researchUrls: string[] = [];
       if (options.job) {
         try {
-          postingText = await resolveJobPosting({
+          const resolvedJob = await resolveJobPosting({
             job: options.job,
             // On a fetch failure, drop to a paste prompt so a broken link never blocks
             // the interview; a blank paste proceeds with a generic interview.
@@ -83,6 +85,8 @@ program
               return pasted;
             },
           });
+          postingText = resolvedJob.postingText;
+          researchUrls = resolvedJob.researchUrls;
         } catch (error) {
           p.cancel(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -93,9 +97,10 @@ program
       const spinner = p.spinner();
       spinner.start(postingText ? 'Parsing CV and job posting…' : 'Parsing CV…');
       try {
-        const { profile, roleContext } = await ingestCv({
+        const { profile, roleContext, companyBrief } = await ingestCv({
           cvPath: options.cv,
           postingText,
+          researchUrls,
           provider: options.provider,
           fastModel: options.fastModel,
           smartModel: options.smartModel,
@@ -104,6 +109,7 @@ program
         spinner.stop('Parsed.');
         p.note(formatCandidateProfile(profile), 'Candidate profile');
         p.note(formatRoleContext(roleContext), 'Role context');
+        p.note(formatCompanyBrief(companyBrief), 'Company brief');
         p.outro('Profile saved to working memory.');
       } catch (error) {
         spinner.stop('Parsing failed.');
