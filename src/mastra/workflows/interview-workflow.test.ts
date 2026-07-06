@@ -1,10 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { RequestContext } from '@mastra/core/request-context';
 
 import { candidateMemory } from '../memory';
 import { candidateProfileSchema } from '../schemas/candidate-profile';
-import { createAgentExtractor, persistCandidateProfile } from './interview-workflow';
+import { DEFAULT_ROLE_CONTEXT, roleContextSchema } from '../schemas/role-context';
+import {
+  buildRoleContext,
+  createAgentExtractor,
+  createRoleContextBuilder,
+  persistCandidateProfile,
+} from './interview-workflow';
 
 const cannedProfile = {
   name: 'Ada Lovelace',
@@ -144,5 +150,76 @@ describe('createAgentExtractor', () => {
     );
 
     await expect(extractor('cv text')).rejects.toThrow(/no structured profile/i);
+  });
+});
+
+describe('createRoleContextBuilder', () => {
+  const requestContext = new RequestContext();
+  const cannedRole = roleContextSchema.parse({
+    company: 'Globex',
+    role: 'Staff Engineer',
+    competencies: [{ name: 'Distributed systems', weight: 0.9 }],
+  });
+
+  it('requests structured output against the role-context schema, forwarding the tiering context', async () => {
+    let seenSchema: unknown;
+    let seenContext: unknown;
+    let seenPrompt = '';
+    const builder = createRoleContextBuilder(
+      {
+        generate: async (prompt, options) => {
+          seenPrompt = prompt;
+          seenSchema = options.structuredOutput.schema;
+          seenContext = options.requestContext;
+          return { object: cannedRole };
+        },
+      },
+      requestContext,
+    );
+
+    const role = await builder('Staff Engineer at Globex. Owns distributed systems.');
+
+    expect(seenSchema).toBe(roleContextSchema);
+    expect(seenContext).toBe(requestContext);
+    expect(seenPrompt).toContain('Owns distributed systems.');
+    expect(role.company).toBe('Globex');
+  });
+
+  it('throws when the model returns no structured role context', async () => {
+    const builder = createRoleContextBuilder(
+      { generate: async () => ({ object: undefined }) },
+      requestContext,
+    );
+
+    await expect(builder('some posting')).rejects.toThrow(/no structured role context/i);
+  });
+});
+
+describe('buildRoleContext', () => {
+  it('derives the role context from posting text via the builder', async () => {
+    const role = await buildRoleContext({
+      builder: async (postingText) =>
+        roleContextSchema.parse({ role: 'Derived', summary: postingText }),
+      postingText: 'A posting',
+    });
+
+    expect(role.role).toBe('Derived');
+    expect(role.summary).toBe('A posting');
+  });
+
+  it('falls back to the default role context when no posting is provided', async () => {
+    const builder = vi.fn();
+    const role = await buildRoleContext({ builder, postingText: undefined });
+
+    expect(role).toBe(DEFAULT_ROLE_CONTEXT);
+    expect(builder).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the default when the posting text is blank', async () => {
+    const builder = vi.fn();
+    const role = await buildRoleContext({ builder, postingText: '   ' });
+
+    expect(role).toBe(DEFAULT_ROLE_CONTEXT);
+    expect(builder).not.toHaveBeenCalled();
   });
 });
