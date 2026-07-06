@@ -8,6 +8,11 @@ import {
   candidateProfileSchema,
   type CandidateProfile,
 } from '../schemas/candidate-profile';
+import {
+  DEFAULT_ROLE_CONTEXT,
+  roleContextSchema,
+  type RoleContext,
+} from '../schemas/role-context';
 
 /**
  * The model boundary for CV parsing, injected so it can be mocked in tests: given
@@ -134,6 +139,61 @@ export function createAgentExtractor(
   };
 }
 
+/**
+ * The slice of the role-builder agent's `generate` the ingest step calls: structured
+ * output against the role-context schema, driven by the run's request context. Typed
+ * concretely so a wrong `structuredOutput` shape is caught at the call site; the real
+ * Mastra `Agent` satisfies it structurally.
+ */
+export interface StructuredRoleContextGenerator {
+  generate(
+    prompt: string,
+    options: {
+      structuredOutput: { schema: typeof roleContextSchema };
+      requestContext: RequestContext;
+    },
+  ): Promise<{ object?: RoleContext }>;
+}
+
+/** Build the prompt fed to the role-builder agent. */
+export function buildRoleContextPrompt(postingText: string): string {
+  return `Derive the role context from this job posting.\n\n---\n${postingText}\n---`;
+}
+
+/** Turn resolved posting text into a role context via the role-builder agent. */
+export type RoleContextBuilder = (postingText: string) => Promise<RoleContext>;
+
+/** Real builder: run the role-builder agent with structured output on the fast tier. */
+export function createRoleContextBuilder(
+  agent: StructuredRoleContextGenerator,
+  requestContext: RequestContext,
+): RoleContextBuilder {
+  return async (postingText) => {
+    const result = await agent.generate(buildRoleContextPrompt(postingText), {
+      structuredOutput: { schema: roleContextSchema },
+      requestContext,
+    });
+    if (!result.object) {
+      throw new Error('Role builder returned no structured role context.');
+    }
+    return result.object;
+  };
+}
+
+/**
+ * Resolve the role context for a run: when a posting was provided, derive it with the
+ * role-builder (validated against the schema); otherwise fall back to a generic
+ * default so the interview proceeds even without a job posting.
+ */
+export async function buildRoleContext(params: {
+  builder: RoleContextBuilder;
+  postingText?: string;
+}): Promise<RoleContext> {
+  const text = params.postingText?.trim();
+  if (!text) return DEFAULT_ROLE_CONTEXT;
+  return roleContextSchema.parse(await params.builder(text));
+}
+
 const ingestInputSchema = z.object({
   // `cvPath` is a local filesystem path read directly by the ingest step. In the
   // CLI it is the operator's own trusted input. If this workflow is ever exposed
@@ -143,16 +203,26 @@ const ingestInputSchema = z.object({
   cvPath: z.string().describe('Path to the candidate CV file (.pdf, .txt, or .md).'),
   resourceId: z.string().describe('Stable id for the candidate; keys resource-scoped memory.'),
   threadId: z.string().describe('Id for this interview session.'),
+  // Already-resolved posting text (from a URL, file, or paste). Resolution — and the
+  // interactive paste fallback on a fetch failure — happens client-side before the
+  // run starts, so the step only turns text into a role context. Omit for a generic
+  // interview.
+  postingText: z
+    .string()
+    .optional()
+    .describe('Resolved job-posting text; omit to run a generic behavioral interview.'),
 });
 
 const ingestOutputSchema = z.object({
   profile: candidateProfileSchema,
+  roleContext: roleContextSchema,
 });
 
 /**
- * `ingest`: read the CV, parse it into a structured profile with the CV-parser
- * agent, and write that profile into the candidate's working memory. The first
- * step of the interview workflow.
+ * `ingest`: read the CV into a structured profile (written to the candidate's working
+ * memory) and derive the role context from the resolved job posting, falling back to a
+ * generic role context when no posting was provided. The first step of the interview
+ * workflow.
  */
 export const ingestStep = createStep({
   id: 'ingest',
@@ -160,15 +230,20 @@ export const ingestStep = createStep({
   outputSchema: ingestOutputSchema,
   execute: async ({ inputData, mastra, requestContext }) => {
     const cvText = await extractCvText(inputData.cvPath);
-    const agent = mastra.getAgent('cvParser');
     const profile = await persistCandidateProfile({
-      extractor: createAgentExtractor(agent, requestContext),
+      extractor: createAgentExtractor(mastra.getAgent('cvParser'), requestContext),
       cvText,
       memory: candidateMemory,
       resourceId: inputData.resourceId,
       threadId: inputData.threadId,
     });
-    return { profile };
+
+    const roleContext = await buildRoleContext({
+      builder: createRoleContextBuilder(mastra.getAgent('roleBuilder'), requestContext),
+      postingText: inputData.postingText,
+    });
+
+    return { profile, roleContext };
   },
 });
 
