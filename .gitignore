@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.mastra/
+web/dist/
+
+# Local data: workflow snapshots, memory, scorer results, vector index
+data/
+*.db
+*.sqlite
+
+# Private knowledge corpus (only synthetic samples are committed)
+knowledge/
+!knowledge/samples/
+
+# Secrets
+.env
+.env.*
+
+# Planning notes and task files (source of truth lives in the working checkout only)
+plans/
