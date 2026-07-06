@@ -9,6 +9,11 @@ import {
   type CandidateProfile,
 } from '../schemas/candidate-profile';
 import {
+  EMPTY_COMPANY_BRIEF,
+  companyBriefSchema,
+  type CompanyBrief,
+} from '../schemas/company-brief';
+import {
   DEFAULT_ROLE_CONTEXT,
   roleContextSchema,
   type RoleContext,
@@ -194,6 +199,125 @@ export async function buildRoleContext(params: {
   return roleContextSchema.parse(await params.builder(text));
 }
 
+export const RESEARCH_FETCH_BUDGET = 3;
+
+export interface StructuredResearchBriefGenerator {
+  generate(
+    prompt: string,
+    options: {
+      structuredOutput: { schema: typeof companyBriefSchema };
+      requestContext: RequestContext;
+      maxSteps: number;
+      hooks: {
+        beforeToolCall: (context: { toolName: string }) =>
+          | void
+          | {
+              proceed: false;
+              output: { text: string; url: string };
+            };
+      };
+    },
+  ): Promise<{ object?: CompanyBrief }>;
+}
+
+export interface ResearchBriefInput {
+  roleContext: RoleContext;
+  researchUrls: string[];
+}
+
+export type CompanyBriefBuilder = (input: ResearchBriefInput) => Promise<CompanyBrief>;
+
+export function buildResearchPrompt(input: ResearchBriefInput): string {
+  const role = input.roleContext;
+  const companyLine = role.company ? `Company: ${role.company}` : 'Company: unknown';
+  const urls =
+    input.researchUrls.length > 0
+      ? input.researchUrls.map((url) => `- ${url}`).join('\n')
+      : '- none provided';
+  return `Write a short public company brief for a behavioral interview.
+
+${companyLine}
+Role: ${role.role}
+${role.summary ? `Role context: ${role.summary}` : ''}
+Allowed public research URLs:
+${urls}
+
+Use the fetchResearchPage tool for public company pages only when the prompt or role context gives you a public URL. Do not guess URLs. Use at most ${RESEARCH_FETCH_BUDGET} fetches. If you cannot find public context, return an empty summary, facts, and sources.`;
+}
+
+export function createResearchFetchBudgetHooks(maxFetches: number = RESEARCH_FETCH_BUDGET): {
+  beforeToolCall: (context: { toolName: string }) =>
+    | void
+    | {
+        proceed: false;
+        output: { text: string; url: string };
+      };
+} {
+  let fetches = 0;
+  return {
+    beforeToolCall: ({ toolName }) => {
+      if (toolName !== 'fetchResearchPage') return;
+      if (fetches >= maxFetches) {
+        return {
+          proceed: false,
+          output: { text: 'Research fetch budget exhausted; no page was fetched.', url: '' },
+        };
+      }
+      fetches += 1;
+    },
+  };
+}
+
+export function createResearchBriefBuilder(
+  agent: StructuredResearchBriefGenerator,
+  requestContext: RequestContext,
+): CompanyBriefBuilder {
+  return async (input) => {
+    const result = await agent.generate(buildResearchPrompt(input), {
+      structuredOutput: { schema: companyBriefSchema },
+      requestContext,
+      maxSteps: RESEARCH_FETCH_BUDGET + 1,
+      hooks: createResearchFetchBudgetHooks(),
+    });
+    if (!result.object) {
+      throw new Error('Research agent returned no structured company brief.');
+    }
+    return result.object;
+  };
+}
+
+export async function buildCompanyBrief(params: {
+  builder: CompanyBriefBuilder;
+  roleContext: RoleContext;
+  researchUrls?: string[];
+  timeoutMs?: number;
+}): Promise<CompanyBrief> {
+  try {
+    const research = params.builder({
+      roleContext: params.roleContext,
+      researchUrls: params.researchUrls ?? [],
+    });
+    return companyBriefSchema.parse(await withTimeout(research, params.timeoutMs ?? 15_000));
+  } catch {
+    return EMPTY_COMPANY_BRIEF;
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Company research timed out.')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+
 const ingestInputSchema = z.object({
   // `cvPath` is a local filesystem path read directly by the ingest step. In the
   // CLI it is the operator's own trusted input. If this workflow is ever exposed
@@ -211,11 +335,20 @@ const ingestInputSchema = z.object({
     .string()
     .optional()
     .describe('Resolved job-posting text; omit to run a generic behavioral interview.'),
+  researchUrls: z
+    .array(z.string())
+    .default([])
+    .describe('Public URLs the research step may fetch for company context.'),
 });
 
 const ingestOutputSchema = z.object({
   profile: candidateProfileSchema,
   roleContext: roleContextSchema,
+  researchUrls: z.array(z.string()).default([]),
+});
+
+const researchOutputSchema = ingestOutputSchema.extend({
+  companyBrief: companyBriefSchema,
 });
 
 /**
@@ -243,19 +376,35 @@ export const ingestStep = createStep({
       postingText: inputData.postingText,
     });
 
-    return { profile, roleContext };
+    return { profile, roleContext, researchUrls: inputData.researchUrls };
+  },
+});
+
+export const researchStep = createStep({
+  id: 'research',
+  inputSchema: ingestOutputSchema,
+  outputSchema: researchOutputSchema,
+  execute: async ({ inputData, mastra, requestContext }) => {
+    const companyBrief = await buildCompanyBrief({
+      builder: createResearchBriefBuilder(mastra.getAgent('research'), requestContext),
+      roleContext: inputData.roleContext,
+      researchUrls: inputData.researchUrls,
+    });
+
+    return { ...inputData, companyBrief };
   },
 });
 
 /**
- * The interview workflow. Task 0002 wires only its first step, `ingest`; later
- * tasks extend it with research, the adaptive interview loop, grading, and
+ * The interview workflow. It starts with `ingest`, then performs best-effort
+ * company research before later tasks add the adaptive interview loop, grading, and
  * coaching, on the same run so its snapshot carries the whole session.
  */
 export const interviewWorkflow = createWorkflow({
   id: 'interviewWorkflow',
   inputSchema: ingestInputSchema,
-  outputSchema: ingestOutputSchema,
+  outputSchema: researchOutputSchema,
 })
   .then(ingestStep)
+  .then(researchStep)
   .commit();

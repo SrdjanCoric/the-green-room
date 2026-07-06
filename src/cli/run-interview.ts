@@ -7,6 +7,7 @@ import {
   type ModelTierOptions,
 } from '../mastra/model-config';
 import type { CandidateProfile } from '../mastra/schemas/candidate-profile';
+import type { CompanyBrief } from '../mastra/schemas/company-brief';
 import type { RoleContext } from '../mastra/schemas/role-context';
 import { capPostingText } from '../mastra/tools/fetch-posting';
 import {
@@ -20,6 +21,8 @@ export interface IngestCvOptions extends ModelTierOptions {
   cvPath: string;
   /** Resolved job-posting text; omit to run a generic behavioral interview. */
   postingText?: string;
+  /** Public URLs the research step may fetch for company context. */
+  researchUrls?: string[];
   /** Stable candidate id; keys resource-scoped working memory. Defaults to a fresh id. */
   resourceId?: string;
   /** Interview session id. Defaults to a fresh id per run. */
@@ -30,6 +33,7 @@ export interface IngestCvOptions extends ModelTierOptions {
 export interface IngestResult {
   profile: CandidateProfile;
   roleContext: RoleContext;
+  companyBrief: CompanyBrief;
 }
 
 export interface ResolveJobPostingOptions {
@@ -45,6 +49,11 @@ export interface ResolveJobPostingOptions {
   resolveOptions?: ResolvePostingOptions;
 }
 
+export interface ResolvedJobPostingInput {
+  postingText?: string;
+  researchUrls: string[];
+}
+
 /**
  * Resolve the `--job` argument into posting text. A URL is fetched, a file is read,
  * and anything else is treated as pasted text. When a URL fetch fails and an
@@ -54,19 +63,22 @@ export interface ResolveJobPostingOptions {
  */
 export async function resolveJobPosting(
   options: ResolveJobPostingOptions,
-): Promise<string | undefined> {
+): Promise<ResolvedJobPostingInput> {
   const job = options.job?.trim();
-  if (!job) return undefined;
+  if (!job) return { postingText: undefined, researchUrls: [] };
 
   try {
     const resolved = await resolvePosting(job, options.resolveOptions);
-    return resolved.text;
+    return { postingText: resolved.text, researchUrls: resolved.url ? [resolved.url] : [] };
   } catch (error) {
     if (error instanceof PostingFetchError && options.onFetchFailure) {
       const pasted = await options.onFetchFailure(error.url);
       const trimmed = pasted?.trim();
       // Cap the pasted text to the same limit as every other resolution path.
-      return trimmed && trimmed.length > 0 ? capPostingText(trimmed) : undefined;
+      return {
+        postingText: trimmed && trimmed.length > 0 ? capPostingText(trimmed) : undefined,
+        researchUrls: [],
+      };
     }
     throw error;
   }
@@ -102,7 +114,13 @@ export async function ingestCv(options: IngestCvOptions): Promise<IngestResult> 
   const workflow = mastra.getWorkflow('interviewWorkflow');
   const run = await workflow.createRun();
   const result = await run.start({
-    inputData: { cvPath: options.cvPath, resourceId, threadId, postingText: options.postingText },
+    inputData: {
+      cvPath: options.cvPath,
+      resourceId,
+      threadId,
+      postingText: options.postingText,
+      researchUrls: options.researchUrls ?? [],
+    },
     requestContext,
   });
 
@@ -116,7 +134,11 @@ export async function ingestCv(options: IngestCvOptions): Promise<IngestResult> 
     throw new Error(`Interview ingest failed — ${detail}`, cause ? { cause } : undefined);
   }
 
-  return { profile: result.result.profile, roleContext: result.result.roleContext };
+  return {
+    profile: result.result.profile,
+    roleContext: result.result.roleContext,
+    companyBrief: result.result.companyBrief,
+  };
 }
 
 /** Pull a human message out of a workflow error, whether an `Error` or a serialized `{ message }`. */
@@ -187,4 +209,34 @@ export function formatRoleContext(role: RoleContext): string {
   }
 
   return lines.join('\n');
+}
+
+/** Render a company research brief as a readable multi-line summary for the CLI. */
+export function formatCompanyBrief(brief: CompanyBrief): string {
+  const hasSummary = brief.summary.trim().length > 0;
+  const hasFacts = brief.facts.length > 0;
+  const hasSources = brief.sources.length > 0;
+  if (!brief.company && !hasSummary && !hasFacts && !hasSources) {
+    return 'No company brief is available.';
+  }
+
+  const lines: string[] = [];
+  if (brief.company) lines.push(brief.company);
+  if (hasSummary) lines.push('', brief.summary);
+
+  if (hasFacts) {
+    lines.push('', 'Facts:');
+    for (const fact of brief.facts) {
+      lines.push(`  • ${fact}`);
+    }
+  }
+
+  if (hasSources) {
+    lines.push('', 'Sources:');
+    for (const source of brief.sources) {
+      lines.push(`  • ${source}`);
+    }
+  }
+
+  return lines.join('\n').trim();
 }

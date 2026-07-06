@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  formatCompanyBrief,
   formatCandidateProfile,
   formatRoleContext,
   ingestCv,
@@ -75,24 +76,62 @@ describe('formatRoleContext', () => {
   });
 });
 
+describe('formatCompanyBrief', () => {
+  it('renders a company brief with facts and sources', () => {
+    const out = formatCompanyBrief({
+      company: 'Globex',
+      summary: 'Globex builds collaboration software.',
+      facts: ['Runs a global platform.'],
+      sources: ['https://globex.example/about'],
+    });
+
+    expect(out).toContain('Globex');
+    expect(out).toContain('Runs a global platform.');
+    expect(out).toContain('https://globex.example/about');
+  });
+
+  it('states plainly when no company brief is available', () => {
+    const out = formatCompanyBrief({ summary: '', facts: [], sources: [] });
+
+    expect(out).toContain('No company brief');
+  });
+});
+
 describe('resolveJobPosting', () => {
   it('returns undefined when no job argument is supplied', async () => {
-    expect(await resolveJobPosting({})).toBeUndefined();
+    expect(await resolveJobPosting({})).toEqual({ postingText: undefined, researchUrls: [] });
   });
 
   it('returns the resolved posting text for inline text', async () => {
-    const text = await resolveJobPosting({
+    const resolved = await resolveJobPosting({
       job: 'Senior Designer at Initech.',
       resolveOptions: { fileExists: async () => false },
     });
 
-    expect(text).toBe('Senior Designer at Initech.');
+    expect(resolved).toEqual({ postingText: 'Senior Designer at Initech.', researchUrls: [] });
+  });
+
+  it('keeps the final posting URL as a research seed for URL jobs', async () => {
+    const resolved = await resolveJobPosting({
+      job: 'https://jobs.example.com/role',
+      resolveOptions: {
+        fetchPosting: async () => ({
+          text: 'Senior Designer at Initech.',
+          url: 'https://jobs.example.com/role/final',
+        }),
+      },
+    });
+
+    expect(resolved).toEqual({
+      postingText: 'Senior Designer at Initech.',
+      researchUrls: ['https://jobs.example.com/role/final'],
+    });
   });
 
   it('falls back to pasted text when a URL fetch fails', async () => {
     const onFetchFailure = vi.fn(async () => 'Pasted posting body.');
 
-    const text = await resolveJobPosting({
+    const resolved = await resolveJobPosting({
       job: 'https://jobs.example.com/role',
       onFetchFailure,
       resolveOptions: {
@@ -103,11 +142,11 @@ describe('resolveJobPosting', () => {
     });
 
     expect(onFetchFailure).toHaveBeenCalledWith('https://jobs.example.com/role');
-    expect(text).toBe('Pasted posting body.');
+    expect(resolved).toEqual({ postingText: 'Pasted posting body.', researchUrls: [] });
   });
 
   it('proceeds with a generic interview when the paste is declined', async () => {
-    const text = await resolveJobPosting({
+    const resolved = await resolveJobPosting({
       job: 'https://jobs.example.com/role',
       onFetchFailure: async () => null,
       resolveOptions: {
@@ -117,7 +156,7 @@ describe('resolveJobPosting', () => {
       },
     });
 
-    expect(text).toBeUndefined();
+    expect(resolved).toEqual({ postingText: undefined, researchUrls: [] });
   });
 });
 
