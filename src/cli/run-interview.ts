@@ -7,14 +7,69 @@ import {
   type ModelTierOptions,
 } from '../mastra/model-config';
 import type { CandidateProfile } from '../mastra/schemas/candidate-profile';
+import type { RoleContext } from '../mastra/schemas/role-context';
+import { capPostingText } from '../mastra/tools/fetch-posting';
+import {
+  PostingFetchError,
+  resolvePosting,
+  type ResolvePostingOptions,
+} from '../mastra/tools/resolve-posting';
 
 export interface IngestCvOptions extends ModelTierOptions {
   /** Path to the CV file (.pdf, .txt, or .md). */
   cvPath: string;
+  /** Resolved job-posting text; omit to run a generic behavioral interview. */
+  postingText?: string;
   /** Stable candidate id; keys resource-scoped working memory. Defaults to a fresh id. */
   resourceId?: string;
   /** Interview session id. Defaults to a fresh id per run. */
   threadId?: string;
+}
+
+/** The outcome of an ingest run: the parsed candidate profile and the derived role context. */
+export interface IngestResult {
+  profile: CandidateProfile;
+  roleContext: RoleContext;
+}
+
+export interface ResolveJobPostingOptions {
+  /** The raw `--job` argument: a URL, a file path, or pasted text. */
+  job?: string;
+  /**
+   * Called when a URL fetch fails, to offer the paste fallback. Returns the pasted
+   * posting text, or null to proceed without a posting (a broken link never blocks
+   * the interview).
+   */
+  onFetchFailure?: (url: string) => Promise<string | null>;
+  /** Injected resolver options, for tests. */
+  resolveOptions?: ResolvePostingOptions;
+}
+
+/**
+ * Resolve the `--job` argument into posting text. A URL is fetched, a file is read,
+ * and anything else is treated as pasted text. When a URL fetch fails and an
+ * `onFetchFailure` handler is given, it is offered the chance to paste the posting;
+ * declining (or no posting at all) yields `undefined`, so the run falls back to a
+ * generic interview rather than failing.
+ */
+export async function resolveJobPosting(
+  options: ResolveJobPostingOptions,
+): Promise<string | undefined> {
+  const job = options.job?.trim();
+  if (!job) return undefined;
+
+  try {
+    const resolved = await resolvePosting(job, options.resolveOptions);
+    return resolved.text;
+  } catch (error) {
+    if (error instanceof PostingFetchError && options.onFetchFailure) {
+      const pasted = await options.onFetchFailure(error.url);
+      const trimmed = pasted?.trim();
+      // Cap the pasted text to the same limit as every other resolution path.
+      return trimmed && trimmed.length > 0 ? capPostingText(trimmed) : undefined;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -39,7 +94,7 @@ export function resolveIngestIds(options: {
  * resolving the model tiers from the given options and injecting them via the
  * request context. Returns the parsed candidate profile.
  */
-export async function ingestCv(options: IngestCvOptions): Promise<CandidateProfile> {
+export async function ingestCv(options: IngestCvOptions): Promise<IngestResult> {
   const tiers = resolveModelTiers(options);
   const requestContext = buildModelRequestContext(tiers);
   const { resourceId, threadId } = resolveIngestIds(options);
@@ -47,7 +102,7 @@ export async function ingestCv(options: IngestCvOptions): Promise<CandidateProfi
   const workflow = mastra.getWorkflow('interviewWorkflow');
   const run = await workflow.createRun();
   const result = await run.start({
-    inputData: { cvPath: options.cvPath, resourceId, threadId },
+    inputData: { cvPath: options.cvPath, resourceId, threadId, postingText: options.postingText },
     requestContext,
   });
 
@@ -61,7 +116,7 @@ export async function ingestCv(options: IngestCvOptions): Promise<CandidateProfi
     throw new Error(`Interview ingest failed — ${detail}`, cause ? { cause } : undefined);
   }
 
-  return result.result.profile;
+  return { profile: result.result.profile, roleContext: result.result.roleContext };
 }
 
 /** Pull a human message out of a workflow error, whether an `Error` or a serialized `{ message }`. */
@@ -111,4 +166,25 @@ export function formatCandidateProfile(profile: CandidateProfile): string {
   }
 
   return lines.length > 0 ? lines.join('\n') : 'No profile fields were extracted from the CV.';
+}
+
+/** Render a role context as a readable multi-line summary for the CLI. */
+export function formatRoleContext(role: RoleContext): string {
+  const lines: string[] = [role.company ? `${role.role} @ ${role.company}` : role.role];
+
+  if (role.seniority) lines.push(`Seniority: ${role.seniority}`);
+  if (role.summary) lines.push('', role.summary);
+
+  if (role.competencies.length > 0) {
+    lines.push('', 'Competencies (weighted):');
+    for (const competency of role.competencies) {
+      lines.push(`  • ${competency.name} (${competency.weight.toFixed(2)})`);
+    }
+  }
+
+  if (role.valuesFramework.length > 0) {
+    lines.push('', `Values: ${role.valuesFramework.join(', ')}`);
+  }
+
+  return lines.join('\n');
 }

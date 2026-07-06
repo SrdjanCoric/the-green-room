@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { formatCandidateProfile, ingestCv, resolveIngestIds } from './run-interview';
+import {
+  formatCandidateProfile,
+  formatRoleContext,
+  ingestCv,
+  resolveIngestIds,
+  resolveJobPosting,
+} from './run-interview';
 
 describe('formatCandidateProfile', () => {
   it('renders the profile fields in a readable summary', () => {
@@ -46,6 +52,72 @@ describe('resolveIngestIds', () => {
     const ids = resolveIngestIds({ resourceId: 'candidate-x', threadId: 'session-x' });
 
     expect(ids).toEqual({ resourceId: 'candidate-x', threadId: 'session-x' });
+  });
+});
+
+describe('formatRoleContext', () => {
+  it('renders the role, weighted competencies, and values', () => {
+    const out = formatRoleContext({
+      company: 'Globex',
+      role: 'Staff Engineer',
+      seniority: 'staff',
+      summary: 'Owns the platform.',
+      competencies: [
+        { name: 'Distributed systems', weight: 0.9 },
+        { name: 'Mentorship', weight: 0.6 },
+      ],
+      valuesFramework: ['Ownership'],
+    });
+
+    expect(out).toContain('Staff Engineer @ Globex');
+    expect(out).toContain('Distributed systems (0.90)');
+    expect(out).toContain('Ownership');
+  });
+});
+
+describe('resolveJobPosting', () => {
+  it('returns undefined when no job argument is supplied', async () => {
+    expect(await resolveJobPosting({})).toBeUndefined();
+  });
+
+  it('returns the resolved posting text for inline text', async () => {
+    const text = await resolveJobPosting({
+      job: 'Senior Designer at Initech.',
+      resolveOptions: { fileExists: async () => false },
+    });
+
+    expect(text).toBe('Senior Designer at Initech.');
+  });
+
+  it('falls back to pasted text when a URL fetch fails', async () => {
+    const onFetchFailure = vi.fn(async () => 'Pasted posting body.');
+
+    const text = await resolveJobPosting({
+      job: 'https://jobs.example.com/role',
+      onFetchFailure,
+      resolveOptions: {
+        fetchPosting: async () => {
+          throw new Error('boom');
+        },
+      },
+    });
+
+    expect(onFetchFailure).toHaveBeenCalledWith('https://jobs.example.com/role');
+    expect(text).toBe('Pasted posting body.');
+  });
+
+  it('proceeds with a generic interview when the paste is declined', async () => {
+    const text = await resolveJobPosting({
+      job: 'https://jobs.example.com/role',
+      onFetchFailure: async () => null,
+      resolveOptions: {
+        fetchPosting: async () => {
+          throw new Error('boom');
+        },
+      },
+    });
+
+    expect(text).toBeUndefined();
   });
 });
 

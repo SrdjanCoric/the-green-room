@@ -2,7 +2,12 @@
 import * as p from '@clack/prompts';
 import { Command } from 'commander';
 
-import { formatCandidateProfile, ingestCv } from './run-interview';
+import {
+  formatCandidateProfile,
+  formatRoleContext,
+  ingestCv,
+  resolveJobPosting,
+} from './run-interview';
 import { runPing } from './run-ping';
 
 const program = new Command();
@@ -44,8 +49,9 @@ program
 
 program
   .command('interview')
-  .description('Ingest a CV into a structured candidate profile.')
+  .description('Ingest a CV and a job posting into a candidate profile and role context.')
   .requiredOption('--cv <path>', 'path to the candidate CV (.pdf, .txt, or .md)')
+  .option('--job <url|file|text>', 'job posting as a URL, a file path, or pasted text')
   .option('--provider <name>', 'model provider for both tiers (default: anthropic)')
   .option('--fast-model <id>', 'model id for the fast tier (CV/role parsers, interviewer)')
   .option('--smart-model <id>', 'model id for the smart tier (director, grader, coach)')
@@ -53,6 +59,7 @@ program
   .action(
     async (options: {
       cv: string;
+      job?: string;
       provider?: string;
       fastModel?: string;
       smartModel?: string;
@@ -60,21 +67,46 @@ program
     }) => {
       p.intro('interview-coach');
 
+      let postingText: string | undefined;
+      if (options.job) {
+        try {
+          postingText = await resolveJobPosting({
+            job: options.job,
+            // On a fetch failure, drop to a paste prompt so a broken link never blocks
+            // the interview; a blank paste proceeds with a generic interview.
+            onFetchFailure: async (url) => {
+              p.log.warn(`Couldn't fetch the posting at ${url}.`);
+              const pasted = await p.text({
+                message: 'Paste the job posting text (leave blank to skip):',
+              });
+              if (p.isCancel(pasted)) return null;
+              return pasted;
+            },
+          });
+        } catch (error) {
+          p.cancel(error instanceof Error ? error.message : String(error));
+          process.exitCode = 1;
+          return;
+        }
+      }
+
       const spinner = p.spinner();
-      spinner.start('Parsing CV…');
+      spinner.start(postingText ? 'Parsing CV and job posting…' : 'Parsing CV…');
       try {
-        const profile = await ingestCv({
+        const { profile, roleContext } = await ingestCv({
           cvPath: options.cv,
+          postingText,
           provider: options.provider,
           fastModel: options.fastModel,
           smartModel: options.smartModel,
           resourceId: options.candidate,
         });
-        spinner.stop('CV parsed.');
+        spinner.stop('Parsed.');
         p.note(formatCandidateProfile(profile), 'Candidate profile');
+        p.note(formatRoleContext(roleContext), 'Role context');
         p.outro('Profile saved to working memory.');
       } catch (error) {
-        spinner.stop('CV parsing failed.');
+        spinner.stop('Parsing failed.');
         p.cancel(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
       }
