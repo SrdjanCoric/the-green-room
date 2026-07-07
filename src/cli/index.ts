@@ -21,7 +21,6 @@ import {
   resolveIngestIds,
   resolveJobPosting,
 } from './run-interview';
-import { runPing } from './run-ping';
 
 const program = new Command();
 
@@ -68,40 +67,11 @@ function reportInterview(rawState: unknown): void {
 program
   .name('interview-coach')
   .description('CLI for the agentic behavioral-interview coach.')
-  .version('0.1.0')
-  .argument('[message]', 'message for the ping workflow to echo')
-  .action(async (message?: string) => {
-    p.intro('interview-coach');
+  .version('0.1.0');
 
-    let text = message;
-    if (text === undefined) {
-      const answer = await p.text({
-        message: 'Message for the ping workflow to echo?',
-        placeholder: 'hello',
-        defaultValue: 'hello',
-      });
-      if (p.isCancel(answer)) {
-        p.cancel('Cancelled.');
-        process.exit(0);
-      }
-      text = answer;
-    }
-
-    const spinner = p.spinner();
-    spinner.start('Running ping workflow…');
-    try {
-      const echoed = await runPing(text);
-      spinner.stop('Workflow finished.');
-      p.outro(`Echoed: ${echoed}`);
-    } catch (error) {
-      spinner.stop('Workflow failed.');
-      p.cancel(error instanceof Error ? error.message : String(error));
-      process.exitCode = 1;
-    }
-  });
-
+// `interview` is the default command, so a bare invocation runs the interview flow.
 program
-  .command('interview')
+  .command('interview', { isDefault: true })
   .description('Run a behavioral interview against a CV and (optional) job posting.')
   .requiredOption('--cv <path>', 'path to the candidate CV (.pdf, .txt, or .md)')
   .option('--job <url|file|text>', 'job posting as a URL, a file path, or pasted text')
