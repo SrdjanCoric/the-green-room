@@ -8,18 +8,21 @@ Under the hood it's one Mastra workflow: it reads your CV into a candidate profi
 posting into role context, gathers a short company brief, runs an adaptive question loop
 (suspending after each question to wait for your answer), then grades the session and writes a
 Markdown report. A LibSQL database holds workflow snapshots, memory, and traces, so an interrupted
-interview can be resumed and every run shows up in Studio.
+interview can be resumed and every run shows up in Studio. The coach is grounded in a small
+retrieval corpus (see [Coaching knowledge](#coaching-knowledge-rag)) so its advice cites a real
+answer-craft methodology rather than generic tips.
 
 ## Requirements
 
 - Node.js ≥ 22.13
-- An Anthropic API key
+- An Anthropic API key (interview, grading, coaching)
+- An OpenAI API key — only for the coach's retrieval (embeddings); the interview runs without it
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env   # then set ANTHROPIC_API_KEY
+cp .env.example .env   # then set ANTHROPIC_API_KEY (and OPENAI_API_KEY for coach RAG)
 ```
 
 ## Running an interview
@@ -63,6 +66,35 @@ Coaching reports are written as Markdown under `./data/reports/`. List them newe
 ```bash
 npm run cli -- reports
 ```
+
+## Coaching knowledge (RAG)
+
+The coach grounds its per-answer fixes in a `how-to-answer` corpus: a set of markdown notes on
+answer craft (STAR structure, quantifying results, owning your part, scoping stories to a level).
+The notes are chunked, embedded with OpenAI `text-embedding-3-small`, and stored in a LibSQL vector
+index at `./data/knowledge.db` (gitignored). When the coach writes advice, it retrieves the most
+relevant guidance for each weak answer and grounds the fix in it.
+
+Build the index before your first coached run:
+
+```bash
+npm run ingest
+```
+
+`ingest` requires `OPENAI_API_KEY` (embedding uses the same model at ingest and query time). It
+reads from your **private corpus** at `knowledge/how-to-answer/` when that directory holds markdown,
+and otherwise falls back to the **committed samples** at `knowledge/samples/`, so it works out of
+the box:
+
+```
+knowledge/
+  how-to-answer/     # your private corpus — gitignored, user-supplied (*.md)
+  samples/           # committed synthetic examples used when the private corpus is absent
+```
+
+Drop your own `*.md` guidance into `knowledge/how-to-answer/` and re-run `npm run ingest` to
+replace the index with your corpus. Only `knowledge/samples/` is committed; the private corpus and
+the vector database never ship.
 
 ## Studio
 
