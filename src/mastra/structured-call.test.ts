@@ -6,11 +6,11 @@ import { structuredCall, textCall, type StructuredGenerator, type TextGenerator 
 
 const shapeSchema = z.object({ name: z.string(), count: z.number().int() });
 
-type GenerateCall = { prompt: string };
+interface GenerateCall { prompt: string }
 
 /** A fake generator that replays queued results (values or errors) and records prompts. */
 function fakeGenerator(
-  outcomes: Array<{ object?: unknown } | { throws: unknown }>,
+  outcomes: ({ object?: unknown } | { throws: unknown })[],
 ): { agent: StructuredGenerator; calls: GenerateCall[] } {
   const calls: GenerateCall[] = [];
   const queue = [...outcomes];
@@ -124,10 +124,10 @@ describe('structuredCall', () => {
 
 describe('structuredCall extras', () => {
   it('passes maxSteps, hooks, and abortSignal through to generate', async () => {
-    const seen: Array<Record<string, unknown>> = [];
+    const seen: Record<string, unknown>[] = [];
     const agent: StructuredGenerator = {
       async generate(_prompt, options) {
-        seen.push(options as unknown as Record<string, unknown>);
+        seen.push(options);
         return { object: { name: 'a', count: 1 } };
       },
     };
@@ -148,7 +148,7 @@ describe('structuredCall extras', () => {
 });
 
 function fakeTextGenerator(
-  outcomes: Array<{ text: string } | { throws: unknown }>,
+  outcomes: ({ text: string } | { throws: unknown })[],
 ): { agent: TextGenerator; calls: GenerateCall[] } {
   const calls: GenerateCall[] = [];
   const queue = [...outcomes];

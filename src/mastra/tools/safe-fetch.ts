@@ -129,7 +129,7 @@ export async function safeFetchText(rawUrl: string, options: SafeFetchOptions): 
 export function pinnedDispatcher(address: string): Agent {
   const family = isIP(address) === 6 ? 6 : 4;
   const lookup: LookupFunction = (_hostname, lookupOptions, callback) => {
-    if (typeof lookupOptions === 'object' && lookupOptions !== null && lookupOptions.all) {
+    if (typeof lookupOptions === 'object' && lookupOptions?.all) {
       callback(null, [{ address, family }]);
     } else {
       callback(null, address, family);
@@ -156,7 +156,8 @@ export async function readBodyCapped(
     }
     return text;
   }
-  const reader = body.getReader();
+  // undici types its body stream as ReadableStream<any>; the chunks are Uint8Array.
+  const reader: ReadableStreamDefaultReader<Uint8Array> = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
@@ -357,7 +358,7 @@ function ipv6Hextets(input: string): number[] | null {
 
   if (halves.length === 1) {
     const groups = toGroups(halves[0] ?? '');
-    return groups && groups.length === 8 ? groups : null;
+    return groups?.length === 8 ? groups : null;
   }
 
   const head = toGroups(halves[0] ?? '');

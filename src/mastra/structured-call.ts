@@ -172,7 +172,7 @@ export async function structuredCall<Schema extends z.ZodType>(
       if (!parsed.success) {
         return { ok: false, feedback: describeIssues(parsed.error), error: parsed.error };
       }
-      return { ok: true, value: parsed.data as z.infer<Schema> };
+      return { ok: true, value: parsed.data };
     },
   });
 }

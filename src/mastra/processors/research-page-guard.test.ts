@@ -74,7 +74,7 @@ function fakeScanner(): { scanner: PageInjectionScanner; scans: string[] } {
         const out: MastraDBMessage[] = [];
         for (const message of messages) {
           const part = message.content.parts[0];
-          const text = part && part.type === 'text' ? part.text : '';
+          const text = part?.type === 'text' ? part.text : '';
           scans.push(text);
           if (text.includes('POISON')) continue;
           if (text.includes('INJECT')) {
@@ -120,8 +120,8 @@ describe('createResearchPageGuard', () => {
   it('is a processInputStep-only processor with a stable id', () => {
     const guard = guardWith(fakeScanner().scanner);
     expect(guard.id).toBe(RESEARCH_PAGE_GUARD_ID);
-    expect(guard.processInputStep).toBeTypeOf('function');
-    expect('processInput' in guard && guard.processInput).toBeFalsy();
+    expect(typeof guard.processInputStep).toBe('function');
+    expect('processInput' in guard).toBe(false);
   });
 
   it('rewrites a flagged page in place, preserving the tool-call/tool-result pairing', async () => {
@@ -140,7 +140,7 @@ describe('createResearchPageGuard', () => {
     expect(rewritten.id).toBe('m2');
     // The tool-invocation part survives with its callId — only the result text changes.
     const part = rewritten.content.parts[0];
-    if (!part || part.type !== 'tool-invocation') throw new Error('expected a tool-invocation part');
+    if (part?.type !== 'tool-invocation') throw new Error('expected a tool-invocation part');
     expect(part.toolInvocation.toolCallId).toBe('call-1');
     expect(part.toolInvocation.state).toBe('result');
     expect(resultText(rewritten)).toBe('neutralized page text');
