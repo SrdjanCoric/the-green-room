@@ -107,6 +107,47 @@ npm run dev            # http://localhost:4111
 Each workflow run appears under observability as a trace, and a suspended interview shows up as a
 run you can inspect between turns.
 
+## Web UI (browser)
+
+The same interview runs in the browser via a plain React single-page app in `web/` (Vite + React +
+TypeScript, no meta-framework). It drives the **unchanged** core workflow over `@mastra/client-js`
+with SSE streaming: it starts a run, streams each question in, submits your answer to resume the
+run, and streams the coaching report — questions and report paint incrementally as the model
+produces them.
+
+It is a **two-process** setup — the Mastra server is the backend, and Vite serves the UI:
+
+```bash
+# Terminal 1 — the Mastra API server (also serves Studio)
+npm run dev                     # http://localhost:4111
+
+# Terminal 2 — the web UI
+cd web
+npm install                     # first time only
+npm run dev                     # http://localhost:5173
+```
+
+Open the Vite URL and run an interview: upload a CV, give the job posting (a link or pasted text),
+raise the curtain, answer each streamed question, and read the director's notes at the end. The
+Vite dev server proxies `/api` and `/prepare-interview` to `http://localhost:4111`, so the browser
+stays same-origin and no CORS configuration is needed. Point the proxy elsewhere with
+`MASTRA_SERVER_URL` if the API runs on another host.
+
+Uploading a CV and resolving a posting link are the only things the browser can't do itself — a
+file input can't hand the server a filesystem path, and an outbound posting fetch must stay behind
+the server's SSRF guard — so the app posts both to one additive server route, `POST
+/prepare-interview`, which persists the CV under `./data/uploads/` and resolves the posting, then
+returns the inputs the run needs. The interview workflow and agents are untouched.
+
+Build the UI for static hosting with `cd web && npm run build` (output in `web/dist/`, gitignored).
+
+```bash
+cd web
+npm test               # component + logic tests (vitest + Testing Library)
+npm run typecheck      # tsc --noEmit
+npm run lint           # eslint
+```
+
 ## Development
 
 ```bash
