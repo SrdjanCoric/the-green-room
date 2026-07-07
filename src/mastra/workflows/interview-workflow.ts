@@ -13,10 +13,9 @@ import {
   companyBriefSchema,
   type CompanyBrief,
 } from '../schemas/company-brief';
-import {
-  transcriptEntrySchema,
-  type TranscriptEntry,
-} from '../schemas/interview';
+import { topicAssessmentSchema } from '../schemas/answer-assessment';
+import { directorActionSchema } from '../schemas/director-decision';
+import { transcriptEntrySchema } from '../schemas/interview';
 import {
   DEFAULT_ROLE_CONTEXT,
   roleContextSchema,
@@ -31,6 +30,12 @@ import {
   type CapLimits,
   type CoverageState,
 } from './interview-caps';
+import {
+  advanceCoverage,
+  agentBrainFactory,
+  decideNextMove,
+  type BrainFactory,
+} from './adaptive-brain';
 
 /**
  * The model boundary for CV parsing, injected so it can be mocked in tests: given
@@ -331,55 +336,13 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 }
 
 
-/**
- * The placeholder question for a turn. The adaptive brain (task 0006) replaces this
- * with a director-driven, transcript-aware question; here it is a deterministic prompt
- * so the loop mechanics — suspend, resume, transcript append, caps — can be built and
- * tested on their own.
- */
-export function placeholderQuestion(questionNumber: number): string {
-  return `Question ${questionNumber}: tell me about a challenge you faced and how you handled it.`;
-}
-
-/**
- * A cheap, dependency-free token estimate (~4 characters per token). Good enough to
- * enforce a coarse token-budget cap without pulling in a tokenizer; the exact model
- * accounting lives in observability, not here.
- */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
-/** The mutable slice of interview state the turn logic reads and advances. */
+/** The slice of interview state the caps read to decide whether the loop may continue. */
 export interface InterviewTurnState {
-  transcript: TranscriptEntry[];
   coverage: CoverageState;
   limits: CapLimits;
 }
 
-/**
- * Record one answered question: append it to the transcript and advance the coverage
- * counters (one more question asked, its question and answer tokens spent). Pure —
- * returns a new state and mutates nothing — so the loop step and its tests share it.
- * Placeholder turns in this task are always new questions, so the within-topic
- * counters reset; the director (task 0006) will drive follow-up/reprompt counting.
- */
-export function recordTurn(
-  state: InterviewTurnState,
-  entry: TranscriptEntry,
-): InterviewTurnState {
-  const coverage: CoverageState = {
-    ...state.coverage,
-    questionCount: state.coverage.questionCount + 1,
-    tokensUsed:
-      state.coverage.tokensUsed + estimateTokens(entry.question) + estimateTokens(entry.answer),
-    consecutiveFollowUps: 0,
-    repromptCount: 0,
-  };
-  return { ...state, transcript: [...state.transcript, entry], coverage };
-}
-
-/** True once no further question is allowed under the caps — the loop should end. */
+/** True once no further question is allowed under the session-ending caps — the loop ends. */
 export function interviewComplete(state: InterviewTurnState): boolean {
   return !allowQuestion(state.coverage, state.limits, 'new').allowed;
 }
@@ -428,12 +391,21 @@ export const researchOutputSchema = ingestOutputSchema.extend({
 
 /**
  * The state threaded through the interview loop: the ingest/research output plus a
- * resolved target level, the running transcript, the coverage counters, the caps
+ * resolved target level, the running transcript, the per-answer assessment log the
+ * director reads, the topic currently under discussion, the coverage counters, the caps
  * bounding the session, and a `done` flag the loop condition reads to stop.
  */
 export const interviewStateSchema = researchOutputSchema.extend({
   targetLevel: z.string().describe('The resolved seniority level the interview targets.'),
   transcript: z.array(transcriptEntrySchema).default([]),
+  assessments: z
+    .array(topicAssessmentSchema)
+    .default([])
+    .describe('The assessor read of each answered turn, in order; the director reads it.'),
+  currentTopic: z
+    .string()
+    .default('')
+    .describe('The topic the conversation is on, carried across follow-ups and reprompts.'),
   coverage: coverageStateSchema,
   limits: capLimitsSchema,
   done: z.boolean().default(false).describe('True once the caps end the interview loop.'),
@@ -452,11 +424,22 @@ const levelResumeSchema = z.object({
   level: z.string().describe('The chosen seniority level.'),
 });
 
-/** Suspend payload for an interview turn: the question posed to the candidate. */
+/**
+ * Suspend payload for an interview turn: the question posed to the candidate, plus the
+ * director's move that produced it. The `action` and `subject` ride across the suspend so
+ * the resume pass can advance the per-topic coverage counters and the current topic for
+ * the exact move that was asked — never re-deciding, which would drift. The director's
+ * private reasoning is deliberately not carried; the client only needs the question.
+ */
 const questionSuspendSchema = z.object({
   kind: z.literal('question'),
   question: z.string().describe('The question posed to the candidate this turn.'),
   questionNumber: z.number().int().positive().describe('1-based index of this question.'),
+  action: directorActionSchema.describe('The director move that produced this question.'),
+  subject: z
+    .string()
+    .default('')
+    .describe('For a new_topic move, the topic opened; empty otherwise.'),
 });
 
 /** Resume payload for an interview turn: the candidate's answer. */
@@ -574,6 +557,8 @@ export const collectLevelStep = createStep({
       ...inputData,
       targetLevel: level,
       transcript: [],
+      assessments: [],
+      currentTopic: '',
       coverage: INITIAL_COVERAGE,
       limits: inputData.limits ?? DEFAULT_CAP_LIMITS,
       done: false,
@@ -582,45 +567,91 @@ export const collectLevelStep = createStep({
 });
 
 /**
- * `interviewTurn`: one turn of the adaptive loop. On the fresh pass it checks the caps
- * and, if a question is still allowed, suspends with a (placeholder) question. On the
- * resume pass it reads that question back from the suspend data — never regenerating —
- * appends `{question, answer}` to the transcript, advances the coverage counters, and
- * marks the loop done once the caps are spent. Driven by `.dountil` below.
+ * Build the adaptive interview-turn step around a brain factory. The factory resolves the
+ * director, interviewer, and assessor from the run's Mastra registry; production passes
+ * `agentBrainFactory`, and tests pass a fake so the loop mechanics can run without models.
+ *
+ * One turn works in two passes:
+ *  - **Fresh pass** (no resume data): if the session-ending caps are already spent, end
+ *    without asking. Otherwise the director decides the next move (nudged past any spent
+ *    per-topic avenue); a `wrap_up`/`terminate` ends the loop, and any other move is
+ *    rendered into a question by the interviewer and suspended on, along with the move
+ *    that produced it.
+ *  - **Resume pass** (answer arrives): record the exact question and answer, advance the
+ *    coverage counters and current topic for that move, run the assessor over the updated
+ *    transcript, append its read to the assessment log, and mark the loop done once the
+ *    caps are spent. The question is read back from the suspend data — never regenerated —
+ *    so an adaptive question can only differ from what the candidate actually answered by
+ *    being a hard error, not a silent mismatch.
  */
-export const interviewTurnStep = createStep({
-  id: 'interviewTurn',
-  inputSchema: interviewStateSchema,
-  outputSchema: interviewStateSchema,
-  suspendSchema: questionSuspendSchema,
-  resumeSchema: answerResumeSchema,
-  execute: async ({ inputData, resumeData, suspend, suspendData }) => {
-    if (!resumeData) {
-      // Fresh pass. If the caps are already spent (e.g. on re-entry), end without
-      // asking; otherwise suspend with this turn's question and wait for the answer.
-      if (interviewComplete(inputData)) {
-        return { ...inputData, done: true };
+export function createInterviewTurnStep(makeBrain: BrainFactory) {
+  return createStep({
+    id: 'interviewTurn',
+    inputSchema: interviewStateSchema,
+    outputSchema: interviewStateSchema,
+    suspendSchema: questionSuspendSchema,
+    resumeSchema: answerResumeSchema,
+    execute: async ({ inputData, resumeData, suspend, suspendData, mastra, requestContext }) => {
+      const brain = makeBrain(mastra, requestContext);
+
+      if (!resumeData) {
+        // Defense-in-depth: on the normal path `done` already gates the loop, so a fresh
+        // pass is only reached with caps to spare. But this enforces the architectural
+        // invariant that the caps end the session regardless of the director — if the step
+        // is ever entered fresh with spent caps (a re-entered or externally seeded run), we
+        // stop here rather than consult the director and risk a question past the cap.
+        if (interviewComplete(inputData)) {
+          return { ...inputData, done: true };
+        }
+
+        const decision = await decideNextMove({
+          coverage: inputData.coverage,
+          limits: inputData.limits,
+          decide: (nudge) => brain.decide(inputData, nudge),
+        });
+        if (decision.action === 'wrap_up' || decision.action === 'terminate') {
+          return { ...inputData, done: true };
+        }
+
+        const question = await brain.question(inputData, decision);
+        return await suspend({
+          kind: 'question',
+          question,
+          questionNumber: inputData.coverage.questionCount + 1,
+          action: decision.action,
+          subject: decision.subject,
+        });
       }
-      const questionNumber = inputData.coverage.questionCount + 1;
-      return await suspend({
-        kind: 'question',
-        question: placeholderQuestion(questionNumber),
-        questionNumber,
-      });
-    }
 
-    // Resume pass. Read the question back from the suspend data — never regenerate
-    // it — so the transcript records exactly what was asked. Once questions are
-    // adaptive (task 0006) a regenerated question would differ from the one the
-    // candidate actually answered, so a missing payload is a hard error, not a fallback.
-    if (!suspendData?.question) {
-      throw new Error('Interview turn resumed without its suspended question; cannot record the transcript.');
-    }
-    const next = recordTurn(inputData, { question: suspendData.question, answer: resumeData.answer });
+      if (!suspendData?.question) {
+        throw new Error(
+          'Interview turn resumed without its suspended question; cannot record the transcript.',
+        );
+      }
 
-    return { ...inputData, transcript: next.transcript, coverage: next.coverage, done: interviewComplete(next) };
-  },
-});
+      const entry = { question: suspendData.question, answer: resumeData.answer };
+      const transcript = [...inputData.transcript, entry];
+      const { coverage, currentTopic } = advanceCoverage(
+        { coverage: inputData.coverage, currentTopic: inputData.currentTopic },
+        { action: suspendData.action, subject: suspendData.subject },
+        entry,
+      );
+      const assessment = await brain.assess(currentTopic, transcript);
+
+      return {
+        ...inputData,
+        transcript,
+        assessments: [...inputData.assessments, { topic: currentTopic, assessment }],
+        currentTopic,
+        coverage,
+        done: !allowQuestion(coverage, inputData.limits, 'new').allowed,
+      };
+    },
+  });
+}
+
+/** The production interview-turn step, driven by the three real interview agents. */
+export const interviewTurnStep = createInterviewTurnStep(agentBrainFactory);
 
 /** The `.dountil` condition: stop looping once a turn reports the caps are spent. */
 export function interviewLoopDone({ inputData }: { inputData: InterviewState }): boolean {
