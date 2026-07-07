@@ -15,21 +15,22 @@ import { coachReportSchema, sessionGradeSchema } from '../mastra/schemas/coach-r
 import { EMPTY_COMPANY_BRIEF } from '../mastra/schemas/company-brief';
 import { directorDecisionSchema } from '../mastra/schemas/director-decision';
 import { roleContextSchema } from '../mastra/schemas/role-context';
-import type { BrainFactory } from '../mastra/workflows/adaptive-brain';
+import type { BrainFactory } from '../mastra/interview/adaptive-brain';
 import { buildModelRequestContext, resolveModelTiers } from '../mastra/model-config';
-import { capLimitsSchema } from '../mastra/workflows/interview-caps';
+import { capLimitsSchema } from '../mastra/interview/interview-caps';
+import { interviewSnapshotPersistence } from '../mastra/workflows/interview-workflow';
 import {
-  closingStep,
-  coachStep,
-  collectLevelStep,
-  createInterviewTurnStep,
-  gradeStep,
-  interviewLoopDone,
-  interviewSnapshotPersistence,
-  reportStep,
   reportedInterviewStateSchema,
   researchOutputSchema,
-} from '../mastra/workflows/interview-workflow';
+} from '../mastra/workflows/interview-state';
+import {
+  closingStep,
+  collectLevelStep,
+  createInterviewTurnStep,
+  interviewLoopDone,
+} from '../mastra/workflows/steps/interview-loop';
+import { coachStep, gradeStep } from '../mastra/workflows/steps/grade-coach';
+import { reportStep } from '../mastra/workflows/steps/report';
 import {
   recoachSession,
   regradeSession,

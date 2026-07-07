@@ -10,17 +10,19 @@ import { candidateProfileSchema } from '../schemas/candidate-profile';
 import { EMPTY_COMPANY_BRIEF } from '../schemas/company-brief';
 import { directorDecisionSchema } from '../schemas/director-decision';
 import { roleContextSchema } from '../schemas/role-context';
-import type { BrainFactory } from './adaptive-brain';
-import { capLimitsSchema } from './interview-caps';
+import type { BrainFactory } from '../interview/adaptive-brain';
+import { capLimitsSchema } from '../interview/interview-caps';
 import {
   asInterviewSuspend,
-  collectLevelStep,
-  createInterviewTurnStep,
-  interviewLoopDone,
   interviewStateSchema,
   readSuspendPayload,
   researchOutputSchema,
-} from './interview-workflow';
+} from './interview-state';
+import {
+  collectLevelStep,
+  createInterviewTurnStep,
+  interviewLoopDone,
+} from './steps/interview-loop';
 
 // A deterministic brain: each turn opens a fresh topic (so successive questions differ),
 // and the assessor returns a fixed read. This exercises the real loop mechanics —

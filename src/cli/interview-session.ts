@@ -8,7 +8,7 @@ import type { RequestContext } from '@mastra/core/request-context';
 import {
   asInterviewSuspend,
   readSuspendPayload,
-} from '../mastra/workflows/interview-workflow';
+} from '../mastra/workflows/interview-state';
 
 /**
  * Accumulate a multi-line answer: read lines until the `/done` sentinel (or end of

@@ -12,15 +12,17 @@ import { candidateProfileSchema } from '../mastra/schemas/candidate-profile';
 import { EMPTY_COMPANY_BRIEF } from '../mastra/schemas/company-brief';
 import { directorDecisionSchema } from '../mastra/schemas/director-decision';
 import { roleContextSchema } from '../mastra/schemas/role-context';
-import type { BrainFactory } from '../mastra/workflows/adaptive-brain';
-import { capLimitsSchema } from '../mastra/workflows/interview-caps';
+import type { BrainFactory } from '../mastra/interview/adaptive-brain';
+import { capLimitsSchema } from '../mastra/interview/interview-caps';
+import {
+  interviewStateSchema,
+  researchOutputSchema,
+} from '../mastra/workflows/interview-state';
 import {
   collectLevelStep,
   createInterviewTurnStep,
   interviewLoopDone,
-  interviewStateSchema,
-  researchOutputSchema,
-} from '../mastra/workflows/interview-workflow';
+} from '../mastra/workflows/steps/interview-loop';
 import {
   loadLastRun,
   reconnectInterview,

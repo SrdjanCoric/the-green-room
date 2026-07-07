@@ -13,11 +13,11 @@ import {
   createDirectorDecider,
   createInterviewerWriter,
   decideNextMove,
-  neutralizeFences,
   renderAssessments,
   renderDirective,
   type BrainState,
 } from './adaptive-brain';
+import { neutralizeFences } from '../prompt-safety';
 import { capLimitsSchema, coverageStateSchema } from './interview-caps';
 
 const limits = capLimitsSchema.parse({

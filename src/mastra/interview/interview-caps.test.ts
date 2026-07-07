@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_CAP_LIMITS,
+  estimateTokens,
   INITIAL_COVERAGE,
   allowQuestion,
   capLimitsSchema,
@@ -78,5 +79,12 @@ describe('allowQuestion', () => {
   it('ships defaults that bound a session', () => {
     expect(DEFAULT_CAP_LIMITS.maxQuestions).toBeGreaterThan(0);
     expect(DEFAULT_CAP_LIMITS.tokenBudget).toBeGreaterThan(0);
+  });
+});
+
+describe('estimateTokens', () => {
+  it('grows with the length of the text and is zero for empty text', () => {
+    expect(estimateTokens('')).toBe(0);
+    expect(estimateTokens('a'.repeat(40))).toBeGreaterThan(estimateTokens('a'.repeat(4)));
   });
 });

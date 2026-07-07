@@ -69,11 +69,15 @@ describe('driveInterview', () => {
       { status: 'suspended', suspendPayload: { collectLevel: { kind: 'level', prompt: 'Level?' } } },
       {
         status: 'suspended',
-        suspendPayload: { interviewTurn: { kind: 'question', question: 'Q1', questionNumber: 1 } },
+        suspendPayload: {
+          interviewTurn: { kind: 'question', question: 'Q1', questionNumber: 1, action: 'new_topic' },
+        },
       },
       {
         status: 'suspended',
-        suspendPayload: { interviewTurn: { kind: 'question', question: 'Q2', questionNumber: 2 } },
+        suspendPayload: {
+          interviewTurn: { kind: 'question', question: 'Q2', questionNumber: 2, action: 'follow_up' },
+        },
       },
       { status: 'success', result: { transcript: [] } },
     ];
