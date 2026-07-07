@@ -1,59 +1,30 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { createInterface } from 'node:readline';
 import { dirname, join } from 'node:path';
 
 import { createWorkflowStateReader } from '@mastra/core/workflows';
 import type { RequestContext } from '@mastra/core/request-context';
+import { z } from 'zod';
 
+import { dataDir } from '../data-dir';
+import { describeError } from '../errors';
 import {
   asInterviewSuspend,
   readSuspendPayload,
-} from '../mastra/workflows/interview-state';
-
-/**
- * Accumulate a multi-line answer: read lines until the `/done` sentinel (or end of
- * input), then join and trim them. Pure over an injected line source, so the sentinel
- * logic is testable without a real terminal.
- */
-export async function collectAnswer(
-  nextLine: () => Promise<string | null>,
-  sentinel = '/done',
-): Promise<string> {
-  const lines: string[] = [];
-  for (;;) {
-    const line = await nextLine();
-    if (line === null || line === sentinel) break;
-    lines.push(line);
-  }
-  return lines.join('\n').trim();
-}
-
-/** Read one multi-line answer from a stream, ending on a `/done` line or EOF. */
-export async function readMultilineAnswer(
-  input: NodeJS.ReadableStream = process.stdin,
-  output: NodeJS.WritableStream = process.stdout,
-): Promise<string> {
-  const rl = createInterface({ input, output });
-  const iterator = rl[Symbol.asyncIterator]();
-  try {
-    return await collectAnswer(async () => {
-      const next = await iterator.next();
-      return next.done ? null : String(next.value);
-    });
-  } finally {
-    rl.close();
-  }
-}
+} from '../workflows/interview-state';
+import { REPLAYABLE_STEPS, type ReplayableStepName } from '../workflows/interview-workflow';
 
 /** A pointer to the most recent interview run, so `resume` can reconnect to it. */
-export interface LastRun {
-  runId: string;
-  threadId: string;
-}
+const lastRunSchema = z.object({
+  runId: z.string(),
+  threadId: z.string(),
+});
 
-/** Default location of the last-run pointer: under the gitignored `data/` directory. */
+export type LastRun = z.infer<typeof lastRunSchema>;
+
+/** Default location of the last-run pointer: beside the database under the
+ *  project-root `data/` directory, so every entrypoint resumes the same run. */
 export function defaultLastRunPath(): string {
-  return join(process.cwd(), 'data', 'last-run.json');
+  return join(dataDir, 'last-run.json');
 }
 
 /** Persist the latest run pointer so an interrupted interview can be resumed by `runId`. */
@@ -62,18 +33,11 @@ export async function saveLastRun(info: LastRun, path = defaultLastRunPath()): P
   await writeFile(path, JSON.stringify(info, null, 2), 'utf8');
 }
 
-/** Load the latest run pointer, or `null` if none has been saved. */
+/** Load the latest run pointer, or `null` if none has been saved (or it is malformed). */
 export async function loadLastRun(path = defaultLastRunPath()): Promise<LastRun | null> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      typeof (parsed as LastRun).runId === 'string'
-    ) {
-      return parsed as LastRun;
-    }
-    return null;
+    const parsed = lastRunSchema.safeParse(JSON.parse(await readFile(path, 'utf8')));
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
@@ -283,7 +247,7 @@ export type ReplayOutcome =
  */
 async function replaySession(
   params: ReplaySessionParams,
-  step: 'grade' | 'coach',
+  stepName: ReplayableStepName,
 ): Promise<ReplayOutcome> {
   const state = await params.workflow.getWorkflowRunById(params.runId);
   if (!state) return { kind: 'not-found' };
@@ -294,7 +258,9 @@ async function replaySession(
     return { kind: 'unfinished' };
   }
 
-  const prerequisite = step === 'grade' ? 'closing' : 'grade';
+  // Step ids and prerequisites come from the workflow's own replayable-step table,
+  // derived from the step objects — never hardcoded strings that could drift.
+  const { step, prerequisite } = REPLAYABLE_STEPS[stepName];
   if (reader.getStepOutput(prerequisite) === undefined) {
     // Terminal, but the step we'd replay from never produced its input (e.g. the run
     // failed before `closing`, or before `grade` for a recoach) — nothing to replay.
@@ -335,11 +301,6 @@ export function describeDriveFailure(result: DriveResult): string | null {
       );
     }
   }
-  const error = result.error;
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message: unknown }).message;
-    if (typeof message === 'string') return message;
-  }
+  if (result.error !== undefined) return describeError(result.error);
   return `Interview run ended with status: ${result.status}`;
 }

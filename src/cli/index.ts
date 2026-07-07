@@ -12,15 +12,15 @@ import {
   describeDriveFailure,
   loadLastRun,
   reconnectInterview,
-  readMultilineAnswer,
   recoachSession,
   regradeSession,
   runInterview,
   type InterviewWorkflowHandle,
   type ReplayOutcome,
   type ReplaySessionParams,
-} from './interview-session';
-import { listReports } from './reports';
+} from '../mastra/session/interview-session';
+import { listReports } from '../mastra/reporting';
+import { readMultilineAnswer } from './terminal-input';
 import {
   formatCompanyBrief,
   formatRoleContext,
