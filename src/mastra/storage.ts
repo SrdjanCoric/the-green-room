@@ -4,17 +4,31 @@ import { fileURLToPath } from 'node:url';
 
 import { LibSQLStore } from '@mastra/libsql';
 
-// Anchor the database to the project root so every entrypoint — the CLI (run
-// from any working directory) and `mastra dev` — reads and writes the same file.
-// A cwd-relative path would silently diverge into separate databases.
-//
-// This module sits two levels below the root both as source (`src/mastra/`, run
-// via tsx) and as the bundle `mastra dev` executes (`.mastra/output/`), so
-// `../..` resolves to the root in both cases. If a future Mastra layout breaks
-// that assumption, set INTERVIEW_COACH_DB_URL to an explicit path — the same
-// override tests use to select an in-memory database.
-const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dbUrl = process.env.INTERVIEW_COACH_DB_URL ?? `file:${join(projectRoot, 'data', 'mastra.db')}`;
+/**
+ * Resolve the one canonical database URL every entrypoint must share.
+ *
+ * The database is anchored to the project root so the CLI (run from any working
+ * directory via tsx) and `mastra dev` (which runs the bundle) read and write the
+ * same file — a cwd-relative path would silently fork into separate databases, and
+ * a path under `src/` would be swept into the bundle as a static asset.
+ *
+ * This module sits two levels below the root both as source (`src/mastra/`) and as
+ * the bundle `mastra dev` executes (`.mastra/output/`), so `../..` resolves to the
+ * root in both layouts. `moduleDir` and `override` are injectable so the resolution
+ * is unit-testable without touching the process environment or the real module path.
+ *
+ * @param moduleDir the directory of this module (`src/mastra` or `.mastra/output`)
+ * @param override an explicit URL (e.g. `INTERVIEW_COACH_DB_URL`); empty is ignored
+ */
+export function resolveDbUrl(moduleDir: string, override?: string): string {
+  if (override) return override;
+  return `file:${join(moduleDir, '..', '..', 'data', 'mastra.db')}`;
+}
+
+const dbUrl = resolveDbUrl(
+  dirname(fileURLToPath(import.meta.url)),
+  process.env.INTERVIEW_COACH_DB_URL,
+);
 
 // LibSQL opens file-backed databases eagerly, so make sure the directory exists
 // first. In-memory databases (used by tests) have no directory to create.

@@ -14,6 +14,20 @@ export const MAX_RESEARCH_PAGE_BYTES = 1 * 1024 * 1024;
 export const MAX_RESEARCH_PAGE_CHARS = 12_000;
 export const MAX_RESEARCH_REDIRECTS = 5;
 
+/**
+ * The tool's own `id`, used when it dispatches a tool call. This is *not* the key the
+ * research agent registers it under — see {@link RESEARCH_FETCH_TOOL_KEY}.
+ */
+export const RESEARCH_FETCH_TOOL_ID = 'fetch-research-page';
+
+/**
+ * The key the research agent registers this tool under (`tools: { [KEY]: … }`). The
+ * `beforeToolCall` fetch-budget hook matches this name, and the research prompt refers to
+ * it. Registration, hook, and prompt all read this one constant so they cannot drift; a
+ * rename here flows to every consumer at once.
+ */
+export const RESEARCH_FETCH_TOOL_KEY = 'fetchResearchPage';
+
 export interface FetchResearchPageResult {
   text: string;
   url: string;
@@ -152,7 +166,7 @@ export function assertNoObviousPromptInjection(text: string): void {
 }
 
 export const fetchResearchPageTool = createTool({
-  id: 'fetch-research-page',
+  id: RESEARCH_FETCH_TOOL_ID,
   description:
     'Fetch a public company research page from an http(s) URL. Refuses localhost and non-global addresses, re-checks redirects, caps page size, and returns readable text.',
   inputSchema: z.object({

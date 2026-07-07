@@ -7,7 +7,12 @@ import { candidateProfileSchema } from '../schemas/candidate-profile';
 import { coachReportSchema } from '../schemas/coach-report';
 import { EMPTY_COMPANY_BRIEF, companyBriefSchema } from '../schemas/company-brief';
 import { DEFAULT_ROLE_CONTEXT, roleContextSchema } from '../schemas/role-context';
-import { fetchResearchPage } from '../tools/fetch-research-page';
+import {
+  RESEARCH_FETCH_TOOL_ID,
+  RESEARCH_FETCH_TOOL_KEY,
+  fetchResearchPage,
+  fetchResearchPageTool,
+} from '../tools/fetch-research-page';
 import {
   capLimitsSchema,
   coverageStateSchema,
@@ -17,6 +22,7 @@ import {
   RESEARCH_FETCH_BUDGET,
   buildCoachPrompt,
   buildCompanyBrief,
+  buildResearchPrompt,
   buildRoleContext,
   createAgentExtractor,
   createResearchFetchBudgetHooks,
@@ -309,6 +315,27 @@ describe('createResearchBriefBuilder', () => {
     expect(brief.summary).toContain('collaboration');
   });
 
+  it('forwards the abort signal to the agent generate call', async () => {
+    let seenSignal: AbortSignal | undefined;
+    const builder = createResearchBriefBuilder(
+      {
+        generate: async (_prompt, options) => {
+          seenSignal = options.abortSignal;
+          return { object: cannedBrief };
+        },
+      },
+      requestContext,
+    );
+
+    const controller = new AbortController();
+    await builder(
+      { roleContext: roleContextSchema.parse({ role: 'Staff Engineer' }), researchUrls: [] },
+      { abortSignal: controller.signal },
+    );
+
+    expect(seenSignal).toBe(controller.signal);
+  });
+
   it('throws when the model returns no structured company brief', async () => {
     const builder = createResearchBriefBuilder(
       { generate: async () => ({ object: undefined }) },
@@ -324,15 +351,47 @@ describe('createResearchBriefBuilder', () => {
   });
 });
 
+describe('research fetch tool naming', () => {
+  // The budget hook gates the tool by its *registration key* (camelCase), which is a
+  // different string from the tool's own `id` (kebab-case). One shared constant keeps
+  // the registration, the hook, and the prompt from drifting apart; these tests fail if
+  // the two names collapse into one or a consumer stops using the shared constant.
+  it('keeps the registration key distinct from the tool id', () => {
+    expect(RESEARCH_FETCH_TOOL_KEY).toBe('fetchResearchPage');
+    expect(RESEARCH_FETCH_TOOL_ID).toBe('fetch-research-page');
+    expect(RESEARCH_FETCH_TOOL_KEY).not.toBe(RESEARCH_FETCH_TOOL_ID);
+  });
+
+  it('defines the tool with the shared id', () => {
+    expect(fetchResearchPageTool.id).toBe(RESEARCH_FETCH_TOOL_ID);
+  });
+
+  it('names the shared registration key in the research prompt', () => {
+    const prompt = buildResearchPrompt({ roleContext: DEFAULT_ROLE_CONTEXT, researchUrls: [] });
+    expect(prompt).toContain(RESEARCH_FETCH_TOOL_KEY);
+  });
+});
+
 describe('createResearchFetchBudgetHooks', () => {
   it('blocks fetchResearchPage calls after the configured budget', () => {
     const hooks = createResearchFetchBudgetHooks(2);
 
-    expect(hooks.beforeToolCall({ toolName: 'fetchResearchPage' })).toBeUndefined();
-    expect(hooks.beforeToolCall({ toolName: 'fetchResearchPage' })).toBeUndefined();
-    expect(hooks.beforeToolCall({ toolName: 'fetchResearchPage' })).toEqual({
+    expect(hooks.beforeToolCall({ toolName: RESEARCH_FETCH_TOOL_KEY })).toBeUndefined();
+    expect(hooks.beforeToolCall({ toolName: RESEARCH_FETCH_TOOL_KEY })).toBeUndefined();
+    expect(hooks.beforeToolCall({ toolName: RESEARCH_FETCH_TOOL_KEY })).toEqual({
       proceed: false,
       output: { text: 'Research fetch budget exhausted; no page was fetched.', url: '' },
+    });
+  });
+
+  it('gates the registration key, not the kebab-case tool id', () => {
+    const hooks = createResearchFetchBudgetHooks(0);
+
+    // The tool id would slip past the budget entirely — proof the hook keys off the
+    // registration name the agent actually dispatches under.
+    expect(hooks.beforeToolCall({ toolName: RESEARCH_FETCH_TOOL_ID })).toBeUndefined();
+    expect(hooks.beforeToolCall({ toolName: RESEARCH_FETCH_TOOL_KEY })).toMatchObject({
+      proceed: false,
     });
   });
 
@@ -340,8 +399,8 @@ describe('createResearchFetchBudgetHooks', () => {
     const hooks = createResearchFetchBudgetHooks(1);
 
     expect(hooks.beforeToolCall({ toolName: 'otherTool' })).toBeUndefined();
-    expect(hooks.beforeToolCall({ toolName: 'fetchResearchPage' })).toBeUndefined();
-    expect(hooks.beforeToolCall({ toolName: 'fetchResearchPage' })).toMatchObject({
+    expect(hooks.beforeToolCall({ toolName: RESEARCH_FETCH_TOOL_KEY })).toBeUndefined();
+    expect(hooks.beforeToolCall({ toolName: RESEARCH_FETCH_TOOL_KEY })).toMatchObject({
       proceed: false,
     });
   });
@@ -407,6 +466,24 @@ describe('buildCompanyBrief', () => {
       timeoutMs: 1,
     });
 
+    expect(brief).toEqual(EMPTY_COMPANY_BRIEF);
+  });
+
+  it('aborts the in-flight research call on timeout instead of leaving it dangling', async () => {
+    let received: AbortSignal | undefined;
+    const brief = await buildCompanyBrief({
+      // The builder never settles on its own; only the abort signal ends it, mirroring a
+      // real `generate` whose LLM call must be cancelled rather than left running.
+      builder: (_input, options) =>
+        new Promise((resolve) => {
+          received = options?.abortSignal;
+          options?.abortSignal?.addEventListener('abort', () => resolve(EMPTY_COMPANY_BRIEF));
+        }),
+      roleContext: roleContextSchema.parse({ company: 'Globex', role: 'Staff Engineer' }),
+      timeoutMs: 1,
+    });
+
+    expect(received?.aborted).toBe(true);
     expect(brief).toEqual(EMPTY_COMPANY_BRIEF);
   });
 });
