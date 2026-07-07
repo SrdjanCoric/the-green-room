@@ -2,9 +2,10 @@
 import { randomUUID } from 'node:crypto';
 
 import * as p from '@clack/prompts';
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 
 import { mastra } from '../mastra/index';
+import { limitsWithMaxQuestions } from '../mastra/interview/interview-caps';
 import { buildModelRequestContext, resolveModelTiers } from '../mastra/model-config';
 import { reportedInterviewStateSchema } from '../mastra/workflows/interview-state';
 import {
@@ -33,6 +34,15 @@ import {
 process.env.INTERVIEW_COACH_TRUST_LOCAL_CV ??= '1';
 
 const program = new Command();
+
+/** Parse a commander option value that must be a positive integer. */
+function parsePositiveInt(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new InvalidArgumentError('Expected a positive whole number.');
+  }
+  return parsed;
+}
 
 /** The interview workflow, typed for the session runners. */
 function interviewWorkflow(): InterviewWorkflowHandle {
@@ -103,6 +113,11 @@ program
     '--candidate <id>',
     'stable candidate id; defaults to the first email in the CV, then "default"',
   )
+  .option(
+    '--max-questions <count>',
+    'ceiling on the number of questions asked in the session (default: 6)',
+    parsePositiveInt,
+  )
   .action(
     async (options: {
       cv: string;
@@ -112,6 +127,7 @@ program
       fastModel?: string;
       smartModel?: string;
       candidate?: string;
+      maxQuestions?: number;
     }) => {
       p.intro('interview-coach');
 
@@ -164,6 +180,7 @@ program
             postingText,
             researchUrls,
             targetLevel: options.level,
+            limits: limitsWithMaxQuestions(options.maxQuestions),
           },
           requestContext,
           threadId,

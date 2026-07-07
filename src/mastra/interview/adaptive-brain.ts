@@ -217,7 +217,7 @@ export function buildDirectorPrompt(state: BrainState, nudge: DirectorNudge = NO
     )}\n</profile>\n` +
     transcriptBlock +
     `Assessment notes so far: ${renderAssessments(state.assessments)}\n` +
-    `Questions asked so far: ${state.coverage.questionCount} of a hard cap of ${state.limits.maxQuestions}.\n` +
+    `Questions asked so far: ${state.coverage.questionCount}. You have a budget of ${state.limits.maxQuestions} questions for the whole session - a ceiling, never a target: wrap up as soon as the signal is sufficient.\n` +
     `Consecutive follow-ups on the current topic: ${state.coverage.consecutiveFollowUps} of a hard cap of ${state.limits.maxConsecutiveFollowUps}.\n` +
     `Reprompts on the current question: ${state.coverage.repromptCount} of a hard cap of ${state.limits.maxReprompts}.\n` +
     (nudge.followUpsExhausted ? FOLLOW_UPS_EXHAUSTED_LINE : '') +
