@@ -2,7 +2,10 @@ import { Mastra } from '@mastra/core/mastra';
 import { PinoLogger } from '@mastra/loggers';
 import { MastraStorageExporter, Observability } from '@mastra/observability';
 
+import { assessorAgent } from './agents/assessor';
 import { cvParserAgent } from './agents/cv-parser';
+import { directorAgent } from './agents/director';
+import { interviewerAgent } from './agents/interviewer';
 import { researchAgent } from './agents/research';
 import { roleBuilderAgent } from './agents/role-builder';
 import { storage } from './storage';
@@ -25,7 +28,14 @@ const observability = new Observability({
 });
 
 export const mastra = new Mastra({
-  agents: { cvParser: cvParserAgent, roleBuilder: roleBuilderAgent, research: researchAgent },
+  agents: {
+    cvParser: cvParserAgent,
+    roleBuilder: roleBuilderAgent,
+    research: researchAgent,
+    director: directorAgent,
+    interviewer: interviewerAgent,
+    assessor: assessorAgent,
+  },
   workflows: { pingWorkflow, interviewWorkflow },
   storage,
   observability,
