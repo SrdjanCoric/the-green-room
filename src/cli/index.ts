@@ -2,16 +2,65 @@
 import * as p from '@clack/prompts';
 import { Command } from 'commander';
 
+import { mastra } from '../mastra/index';
+import { buildModelRequestContext, resolveModelTiers } from '../mastra/model-config';
+import { interviewStateSchema } from '../mastra/workflows/interview-workflow';
+import {
+  describeDriveFailure,
+  loadLastRun,
+  reconnectInterview,
+  readMultilineAnswer,
+  runInterview,
+  type InterviewWorkflowHandle,
+} from './interview-session';
 import {
   formatCompanyBrief,
-  formatCandidateProfile,
   formatRoleContext,
-  ingestCv,
+  formatTranscript,
+  resolveIngestIds,
   resolveJobPosting,
 } from './run-interview';
 import { runPing } from './run-ping';
 
 const program = new Command();
+
+/** The interview workflow, typed for the session runners. */
+function interviewWorkflow(): InterviewWorkflowHandle {
+  return mastra.getWorkflow('interviewWorkflow') as InterviewWorkflowHandle;
+}
+
+/**
+ * Terminal prompt callbacks shared by the `interview` and `resume` commands: a single
+ * line for the target level, and a multi-line answer (ended with `/done`) per question.
+ */
+function terminalPrompts(): {
+  onLevel: (prompt: string) => Promise<string>;
+  onQuestion: (question: string, questionNumber: number) => Promise<string>;
+} {
+  return {
+    onLevel: async (prompt) => {
+      const answer = await p.text({ message: prompt, placeholder: 'senior' });
+      if (p.isCancel(answer)) {
+        p.cancel('Cancelled.');
+        process.exit(0);
+      }
+      return String(answer).trim() || 'senior';
+    },
+    onQuestion: async (question, questionNumber) => {
+      p.log.step(`Question ${questionNumber}`);
+      process.stdout.write(`${question}\n\n(Type your answer; end with a line containing only /done.)\n`);
+      return readMultilineAnswer();
+    },
+  };
+}
+
+/** Print the closing summary of a finished interview: role, company, and transcript. */
+function reportInterview(rawState: unknown): void {
+  const state = interviewStateSchema.parse(rawState);
+  p.note(formatRoleContext(state.roleContext), 'Role context');
+  p.note(formatCompanyBrief(state.companyBrief), 'Company brief');
+  p.note(formatTranscript(state.transcript), `Transcript · level: ${state.targetLevel}`);
+}
 
 program
   .name('interview-coach')
@@ -50,9 +99,10 @@ program
 
 program
   .command('interview')
-  .description('Ingest a CV and a job posting into a candidate profile and role context.')
+  .description('Run a behavioral interview against a CV and (optional) job posting.')
   .requiredOption('--cv <path>', 'path to the candidate CV (.pdf, .txt, or .md)')
   .option('--job <url|file|text>', 'job posting as a URL, a file path, or pasted text')
+  .option('--level <level>', 'target seniority level; omit to be asked (e.g. junior, senior, staff)')
   .option('--provider <name>', 'model provider for both tiers (default: anthropic)')
   .option('--fast-model <id>', 'model id for the fast tier (CV/role parsers, interviewer)')
   .option('--smart-model <id>', 'model id for the smart tier (director, grader, coach)')
@@ -61,6 +111,7 @@ program
     async (options: {
       cv: string;
       job?: string;
+      level?: string;
       provider?: string;
       fastModel?: string;
       smartModel?: string;
@@ -94,30 +145,104 @@ program
         }
       }
 
+      const requestContext = buildModelRequestContext(resolveModelTiers(options));
+      const { resourceId, threadId } = resolveIngestIds({ resourceId: options.candidate });
+
       const spinner = p.spinner();
-      spinner.start(postingText ? 'Parsing CV and job posting…' : 'Parsing CV…');
+      let preparing = false;
+      const stopSpinner = (message: string) => {
+        if (preparing) {
+          spinner.stop(message);
+          preparing = false;
+        }
+      };
       try {
-        const { profile, roleContext, companyBrief } = await ingestCv({
-          cvPath: options.cv,
-          postingText,
-          researchUrls,
-          provider: options.provider,
-          fastModel: options.fastModel,
-          smartModel: options.smartModel,
-          resourceId: options.candidate,
+        spinner.start(postingText ? 'Preparing interview from CV and posting…' : 'Preparing interview from CV…');
+        preparing = true;
+        const { runId, result } = await runInterview({
+          workflow: interviewWorkflow(),
+          inputData: {
+            cvPath: options.cv,
+            resourceId,
+            threadId,
+            postingText,
+            researchUrls,
+            targetLevel: options.level,
+          },
+          requestContext,
+          resourceId,
+          threadId,
+          // Stop the spinner the moment preparation is done and the first prompt is
+          // about to appear, so it doesn't animate over the interactive questions.
+          onReady: () => stopSpinner('Ready — starting the interview.'),
+          ...terminalPrompts(),
         });
-        spinner.stop('Parsed.');
-        p.note(formatCandidateProfile(profile), 'Candidate profile');
-        p.note(formatRoleContext(roleContext), 'Role context');
-        p.note(formatCompanyBrief(companyBrief), 'Company brief');
-        p.outro('Profile saved to working memory.');
+
+        const failure = describeDriveFailure(result);
+        // Safety net for the paths where onReady never fired (preparation failed, or
+        // the run finished without suspending): a no-op if the spinner is already down.
+        stopSpinner(failure ? 'Preparation failed.' : 'Prepared.');
+        if (failure) {
+          p.cancel(failure);
+          process.exitCode = 1;
+          return;
+        }
+
+        reportInterview(result.result);
+        p.outro(`Interview ${runId} finished. Resume anytime with \`resume\`.`);
       } catch (error) {
-        spinner.stop('Parsing failed.');
+        stopSpinner('Preparation failed.');
         p.cancel(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
       }
     },
   );
+
+program
+  .command('resume')
+  .description('Resume an interrupted interview from its stored run id.')
+  .option('--run <id>', 'run id to resume (defaults to the most recent interview)')
+  .action(async (options: { run?: string }) => {
+    p.intro('interview-coach');
+
+    const runId = options.run ?? (await loadLastRun())?.runId;
+    if (!runId) {
+      p.cancel('No interview to resume — start one with `interview` first.');
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      const outcome = await reconnectInterview({
+        workflow: interviewWorkflow(),
+        runId,
+        ...terminalPrompts(),
+      });
+
+      if (outcome.kind === 'not-found') {
+        p.cancel(`No interview run found for id ${runId}.`);
+        process.exitCode = 1;
+        return;
+      }
+      if (outcome.kind === 'already-finished') {
+        p.outro(`Interview ${runId} has already finished — nothing to resume.`);
+        return;
+      }
+
+      const failure = describeDriveFailure(outcome.result);
+      if (failure) {
+        p.cancel(failure);
+        process.exitCode = 1;
+        return;
+      }
+
+      reportInterview(outcome.result.result);
+      p.outro(`Interview ${runId} finished.`);
+    } catch (error) {
+      p.cancel(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  });
 
 // Catch rejections that fall outside the action's own try/catch — e.g. an
 // interactive prompt failing when there is no TTY — so the CLI exits cleanly
