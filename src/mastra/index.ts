@@ -12,6 +12,7 @@ import { researchAgent } from './agents/research';
 import { roleBuilderAgent } from './agents/role-builder';
 import { KNOWLEDGE_VECTOR_STORE_NAME } from './knowledge/config';
 import { knowledgeVectorStore } from './knowledge/vector-store';
+import { prepareInterviewRoute } from './server/prepare-interview-route';
 import { storage } from './storage';
 import { interviewWorkflow } from './workflows/interview-workflow';
 
@@ -46,4 +47,9 @@ export const mastra = new Mastra({
   storage,
   observability,
   logger: new PinoLogger({ name: 'interview-coach', level: 'info' }),
+  // Additive route the browser client calls to persist the uploaded CV and resolve
+  // the posting server-side; the interview workflow and agents are unchanged.
+  server: {
+    apiRoutes: [prepareInterviewRoute],
+  },
 });

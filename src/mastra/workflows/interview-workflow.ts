@@ -3,6 +3,8 @@ import type { WorkflowOptions } from '@mastra/core/workflows';
 import type { RequestContext } from '@mastra/core/request-context';
 import { z } from 'zod';
 
+import { assertCvPathAllowed, CV_PATH_TRUST_ENV } from '../server/cv-path-guard';
+import { uploadsDir } from '../server/uploads-dir';
 import { extractCvText } from '../tools/extract-cv';
 import { RESEARCH_FETCH_TOOL_KEY } from '../tools/fetch-research-page';
 import { candidateMemory } from '../memory';
@@ -706,6 +708,13 @@ export const ingestStep = createStep({
   inputSchema: ingestInputSchema,
   outputSchema: ingestOutputSchema,
   execute: async ({ inputData, mastra, requestContext }) => {
+    // Over the Mastra server `cvPath` is client-controlled, so confine it to the
+    // upload directory unless a trusted process (the CLI) opts out. Without this the
+    // ingest step would read any file on the host — see the `ingestInputSchema` note.
+    assertCvPathAllowed(inputData.cvPath, {
+      uploadsDir,
+      trustLocalPaths: process.env[CV_PATH_TRUST_ENV] === '1',
+    });
     const cvText = await extractCvText(inputData.cvPath);
     const profile = await persistCandidateProfile({
       extractor: createAgentExtractor(mastra.getAgent('cvParser'), requestContext),

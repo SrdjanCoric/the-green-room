@@ -2,6 +2,7 @@ node_modules/
 dist/
 .mastra/
 web/dist/
+*.tsbuildinfo
 
 # Local data: workflow snapshots, memory, scorer results, vector index
 data/
