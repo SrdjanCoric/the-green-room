@@ -34,8 +34,8 @@ function state(overrides: Partial<BrainState> = {}): BrainState {
       role: 'Staff Engineer',
       company: 'Analytical Engines',
       competencies: [
-        { name: 'Distributed systems', weight: 0.9 },
-        { name: 'Mentorship', weight: 0.5 },
+        { name: 'Distributed systems', weight: 5 },
+        { name: 'Mentorship', weight: 3 },
       ],
     }),
     companyBrief: EMPTY_COMPANY_BRIEF,
@@ -197,7 +197,7 @@ describe('buildDirectorPrompt', () => {
     expect(withNudge).toContain('Follow-ups on the current topic are exhausted');
     expect(withoutNudge).not.toContain('Follow-ups on the current topic are exhausted');
     // The weighted competencies reach the director, most-emphasized first.
-    expect(withoutNudge).toContain('Distributed systems (0.9)');
+    expect(withoutNudge).toContain('Distributed systems (5)');
   });
 
   it('feeds the full cap state each turn, including the reprompt count and cap', () => {

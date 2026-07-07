@@ -7,29 +7,29 @@ import {
 } from './role-context';
 
 describe('roleContextSchema', () => {
-  it('accepts a full role context with weighted competencies and values', () => {
+  it('accepts a full role context with integer-weighted competencies and a framework', () => {
     const parsed = roleContextSchema.parse({
       company: 'Analytical Engines',
       role: 'Staff Backend Engineer',
       seniority: 'staff',
       summary: 'Owns the compute platform end to end.',
       competencies: [
-        { name: 'Distributed systems', weight: 0.9 },
-        { name: 'Mentorship', weight: 0.6 },
+        { name: 'Distributed systems', weight: 5 },
+        { name: 'Mentorship', weight: 3 },
       ],
-      valuesFramework: ['Bias for action', 'Ownership'],
+      framework: 'Amazon Leadership Principles',
     });
 
     expect(parsed.company).toBe('Analytical Engines');
-    expect(parsed.competencies[0]).toEqual({ name: 'Distributed systems', weight: 0.9 });
-    expect(parsed.valuesFramework).toContain('Ownership');
+    expect(parsed.competencies[0]).toEqual({ name: 'Distributed systems', weight: 5 });
+    expect(parsed.framework).toBe('Amazon Leadership Principles');
   });
 
-  it('fills competencies and valuesFramework with empty defaults when omitted', () => {
+  it('fills competencies with an empty default and leaves framework unset when omitted', () => {
     const parsed = roleContextSchema.parse({ role: 'Product Manager' });
 
     expect(parsed.competencies).toEqual([]);
-    expect(parsed.valuesFramework).toEqual([]);
+    expect(parsed.framework).toBeUndefined();
   });
 
   it('rejects a role context with no role title', () => {
@@ -38,20 +38,39 @@ describe('roleContextSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a competency weight outside the 0..1 range', () => {
-    const result = competencySchema.safeParse({ name: 'Leadership', weight: 1.5 });
+  it('accepts competency weights across the whole 1..5 integer scale', () => {
+    for (const weight of [1, 2, 3, 4, 5]) {
+      expect(competencySchema.safeParse({ name: 'Leadership', weight }).success).toBe(true);
+    }
+  });
+
+  it('rejects a competency weight below 1 or above 5', () => {
+    expect(competencySchema.safeParse({ name: 'Leadership', weight: 0 }).success).toBe(false);
+    expect(competencySchema.safeParse({ name: 'Leadership', weight: 6 }).success).toBe(false);
+  });
+
+  it('rejects a fractional competency weight', () => {
+    expect(competencySchema.safeParse({ name: 'Leadership', weight: 0.5 }).success).toBe(false);
+  });
+
+  it('rejects a framework passed as an array instead of a single string', () => {
+    const result = roleContextSchema.safeParse({
+      role: 'Engineer',
+      framework: ['Bias for action', 'Ownership'],
+    });
 
     expect(result.success).toBe(false);
   });
 });
 
 describe('DEFAULT_ROLE_CONTEXT', () => {
-  it('is a valid role context with generic, equally-weighted competencies', () => {
+  it('is a valid role context with generic competencies weighted on the 1..5 integer scale', () => {
     expect(roleContextSchema.safeParse(DEFAULT_ROLE_CONTEXT).success).toBe(true);
     expect(DEFAULT_ROLE_CONTEXT.competencies.length).toBeGreaterThan(0);
     for (const competency of DEFAULT_ROLE_CONTEXT.competencies) {
-      expect(competency.weight).toBeGreaterThanOrEqual(0);
-      expect(competency.weight).toBeLessThanOrEqual(1);
+      expect(Number.isInteger(competency.weight)).toBe(true);
+      expect(competency.weight).toBeGreaterThanOrEqual(1);
+      expect(competency.weight).toBeLessThanOrEqual(5);
     }
   });
 });
