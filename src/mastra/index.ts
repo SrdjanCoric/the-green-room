@@ -10,6 +10,8 @@ import { graderAgent } from './agents/grader';
 import { interviewerAgent } from './agents/interviewer';
 import { researchAgent } from './agents/research';
 import { roleBuilderAgent } from './agents/role-builder';
+import { KNOWLEDGE_VECTOR_STORE_NAME } from './knowledge/config';
+import { knowledgeVectorStore } from './knowledge/vector-store';
 import { storage } from './storage';
 import { interviewWorkflow } from './workflows/interview-workflow';
 
@@ -40,6 +42,7 @@ export const mastra = new Mastra({
     coach: coachAgent,
   },
   workflows: { interviewWorkflow },
+  vectors: { [KNOWLEDGE_VECTOR_STORE_NAME]: knowledgeVectorStore },
   storage,
   observability,
   logger: new PinoLogger({ name: 'interview-coach', level: 'info' }),
