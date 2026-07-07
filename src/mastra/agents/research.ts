@@ -2,7 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { PromptInjectionDetector } from '@mastra/core/processors';
 
 import { getTierModel } from '../model-config';
-import { fetchResearchPageTool } from '../tools/fetch-research-page';
+import { RESEARCH_FETCH_TOOL_KEY, fetchResearchPageTool } from '../tools/fetch-research-page';
 
 /**
  * System prompt for the research agent. The fetch mechanics are deliberately locked to
@@ -31,7 +31,7 @@ export const researchAgent = new Agent({
   name: 'Company Research',
   instructions: RESEARCH_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'fast'),
-  tools: { fetchResearchPage: fetchResearchPageTool },
+  tools: { [RESEARCH_FETCH_TOOL_KEY]: fetchResearchPageTool },
   inputProcessors: ({ requestContext }) => [
     new PromptInjectionDetector({
       model: getTierModel(requestContext, 'fast'),
