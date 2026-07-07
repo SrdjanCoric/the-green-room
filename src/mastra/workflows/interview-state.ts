@@ -152,10 +152,50 @@ export const answerResumeSchema = z.object({
   answer: z.string().describe("The candidate's answer to the suspended question."),
 });
 
+/**
+ * Suspend payload for a turn whose agent work failed past its bounded retries. The run
+ * stays suspended — the transcript safe in the snapshot — instead of failing, and the
+ * `resume` command retries the turn. When the failure hit the resume pass (the answer
+ * had already arrived), `pending` carries the complete answered turn so the retry
+ * replays it — assess only — and the candidate is never re-asked.
+ */
+export const failureSuspendSchema = z.object({
+  kind: z.literal('failure'),
+  reason: z.string().describe('What failed, in operator-readable terms.'),
+  stage: z
+    .enum(['director', 'interviewer', 'assessor'])
+    .describe('The turn stage whose agent call failed.'),
+  pending: z
+    .object({
+      question: z.string(),
+      questionNumber: z.number().int().positive(),
+      action: directorActionSchema,
+      subject: z.string().default(''),
+      answer: z.string(),
+    })
+    .optional()
+    .describe('The answered turn awaiting assessment when the failure hit a resume pass.'),
+});
+
+/** Resume payload retrying a turn that suspended with a failure payload. */
+export const retryResumeSchema = z.object({
+  retry: z.literal(true).describe('Retry the failed turn.'),
+});
+
+/** Everything the interview-turn step can suspend with: a question, or a failure. */
+export const turnSuspendSchema = z.discriminatedUnion('kind', [
+  questionSuspendSchema,
+  failureSuspendSchema,
+]);
+
+/** Everything the interview-turn step can resume with: an answer, or a retry. */
+export const turnResumeSchema = z.union([answerResumeSchema, retryResumeSchema]);
+
 /** Every payload an interview run can suspend with, discriminated by `kind`. */
 export const interviewSuspendSchema = z.discriminatedUnion('kind', [
   levelSuspendSchema,
   questionSuspendSchema,
+  failureSuspendSchema,
 ]);
 
 /** The things an interview run can suspend to ask for: a level, or an answer. */
