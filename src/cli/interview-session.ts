@@ -133,6 +133,12 @@ export interface InterviewRunHandle {
   runId: string;
   start(args: { inputData: unknown; requestContext?: RequestContext }): Promise<DriveResult>;
   resume(args: { resumeData: unknown; requestContext?: RequestContext }): Promise<DriveResult>;
+  /**
+   * Re-run the workflow from a given step, reconstructing every earlier step from the
+   * persisted snapshot rather than executing it. Backs `regrade`/`recoach`: re-running
+   * the grading phase without re-asking a single interview question.
+   */
+  timeTravel(args: { step: string; requestContext?: RequestContext }): Promise<DriveResult>;
 }
 
 export interface RunInterviewParams {
@@ -234,6 +240,70 @@ export async function reconnectInterview(
     onQuestion: params.onQuestion,
   });
   return { kind: 'resumed', result };
+}
+
+export interface ReplaySessionParams {
+  workflow: InterviewWorkflowHandle;
+  runId: string;
+  requestContext?: RequestContext;
+}
+
+/**
+ * The outcome of a regrade/recoach attempt: no such run; a run still mid-interview
+ * (nothing to grade yet); a terminal run that never produced the step's input, so there
+ * is nothing to replay from; or a run re-run from the grading phase to a fresh report.
+ */
+export type ReplayOutcome =
+  | { kind: 'not-found' }
+  | { kind: 'unfinished' }
+  | { kind: 'not-replayable' }
+  | { kind: 'replayed'; result: DriveResult };
+
+/**
+ * Re-run a finished interview from a grading-phase step, reusing the stored transcript
+ * and executing no interview turns. `grade` re-runs grade → coach → report; `coach`
+ * re-runs coach → report, reconstructing the earlier grade from the snapshot. Rehydrates
+ * the run by `runId` and time-travels from that step, so nothing before it is re-executed.
+ *
+ * A replay only makes sense once the step it starts from has a stored input: `grade`
+ * reconstructs its transcript from `closing`, and `coach` reconstructs its grade from
+ * `grade`. A run that is still mid-interview, or one that failed before reaching that
+ * prerequisite, has no such snapshot — so we report it rather than time-travelling into a
+ * missing state and surfacing an opaque error or a report graded off nothing.
+ */
+async function replaySession(
+  params: ReplaySessionParams,
+  step: 'grade' | 'coach',
+): Promise<ReplayOutcome> {
+  const state = await params.workflow.getWorkflowRunById(params.runId);
+  if (!state) return { kind: 'not-found' };
+
+  const reader = createWorkflowStateReader(state as Parameters<typeof createWorkflowStateReader>[0]);
+  if (reader.getStatus() === 'suspended') {
+    // The interview is still mid-session: there is no finished transcript to grade yet.
+    return { kind: 'unfinished' };
+  }
+
+  const prerequisite = step === 'grade' ? 'closing' : 'grade';
+  if (reader.getStepOutput(prerequisite) === undefined) {
+    // Terminal, but the step we'd replay from never produced its input (e.g. the run
+    // failed before `closing`, or before `grade` for a recoach) — nothing to replay.
+    return { kind: 'not-replayable' };
+  }
+
+  const run = await params.workflow.createRun({ runId: params.runId });
+  const result = await run.timeTravel({ step, requestContext: params.requestContext });
+  return { kind: 'replayed', result };
+}
+
+/** Re-grade a finished session: re-run grade, coach, and report from the stored transcript. */
+export function regradeSession(params: ReplaySessionParams): Promise<ReplayOutcome> {
+  return replaySession(params, 'grade');
+}
+
+/** Re-coach a finished session: re-run coach and report only, reusing the stored grade. */
+export function recoachSession(params: ReplaySessionParams): Promise<ReplayOutcome> {
+  return replaySession(params, 'coach');
 }
 
 /**
