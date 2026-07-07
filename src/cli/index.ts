@@ -4,7 +4,7 @@ import { Command } from 'commander';
 
 import { mastra } from '../mastra/index';
 import { buildModelRequestContext, resolveModelTiers } from '../mastra/model-config';
-import { reportedInterviewStateSchema } from '../mastra/workflows/interview-workflow';
+import { reportedInterviewStateSchema } from '../mastra/workflows/interview-state';
 import {
   describeDriveFailure,
   loadLastRun,
