@@ -80,7 +80,7 @@ export interface StartInterviewInput {
   /** Seniority level; when omitted the run suspends to ask for it. */
   targetLevel?: string;
   /** Stable candidate id (resource-scoped memory key). */
-  resourceId: string;
+  candidate: string;
   /** This interview session's id. */
   threadId: string;
   /** Optional model-tier overrides; omitted means server defaults. */

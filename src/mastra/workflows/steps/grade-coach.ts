@@ -1,6 +1,14 @@
 import { createStep } from '@mastra/core/workflows';
 import type { RequestContext } from '@mastra/core/request-context';
 
+import {
+  computeSessionSummary,
+  parseCandidateWorkingMemory,
+  renderPriorSessions,
+  upsertSessionSummary,
+  type SessionSummary,
+} from '../../interview/coaching-ledger';
+import { candidateMemory } from '../../memory';
 import { neutralizeFences } from '../../prompt-safety';
 import { structuredCall, type StructuredGenerator } from '../../structured-call';
 import {
@@ -25,6 +33,7 @@ export type CoachReporter = (
   transcript: TranscriptEntry[],
   grade: SessionGrade,
   targetLevel: string,
+  priorSessions?: SessionSummary[],
 ) => Promise<CoachReport>;
 
 function renderNumberedTranscript(transcript: TranscriptEntry[]): string {
@@ -67,7 +76,18 @@ export function buildCoachPrompt(
   transcript: TranscriptEntry[],
   grade: SessionGrade,
   targetLevel: string,
+  priorSessions: SessionSummary[] = [],
 ): string {
+  // A first-session candidate gets no prior-sessions section at all — the prompt must
+  // not invent history. Returning candidates get the ledger, fenced, with explicit
+  // repeat-callout instructions.
+  const priorBlock =
+    priorSessions.length > 0
+      ? `This candidate has practiced before. Here are their previous sessions between the <prior_sessions> tags, oldest first. ` +
+        `Where this session repeats a weakness from an earlier one, call the repeat out explicitly — name what they were advised last time and where it recurred (for example: "last session you were advised to end on a number; it recurred on question 2") — and make the fix firmer.\n` +
+        `<prior_sessions>\n${neutralizeFences(renderPriorSessions(priorSessions))}\n</prior_sessions>\n`
+      : '';
+
   return (
     `The target level for this interview is ${targetLevel}; pitch your advice to it.\n` +
     `Here is the finished interview between the <transcript> tags.\n<transcript>\n${neutralizeFences(
@@ -76,6 +96,7 @@ export function buildCoachPrompt(
     `Here is the grader's read of each answer between the <grades> tags.\n<grades>\n${neutralizeFences(
       renderGradeForCoach(grade),
     )}\n</grades>\n` +
+    priorBlock +
     'Coach this candidate now.'
   );
 }
@@ -106,7 +127,7 @@ export function createCoachReporter(
   requestContext: RequestContext,
   maxAttempts = 3,
 ): CoachReporter {
-  return async (transcript, grade, targetLevel) => {
+  return async (transcript, grade, targetLevel, priorSessions = []) => {
     if (grade.scores.length === 0) {
       return coachReportSchema.parse({ summary: '', answerAdvice: [], drills: [], studyPlan: '' });
     }
@@ -115,12 +136,84 @@ export function createCoachReporter(
     // cross-turn contract to validate — only the structured shape.
     return structuredCall(
       agent,
-      buildCoachPrompt(transcript, grade, targetLevel),
+      buildCoachPrompt(transcript, grade, targetLevel, priorSessions),
       coachReportSchema,
       requestContext,
       { description: 'coach', attempts: maxAttempts },
     );
   };
+}
+
+/** The slice of the memory API the coach step's ledger read/write depends on. */
+export interface CandidateLedgerStore {
+  getWorkingMemory(args: { threadId: string; resourceId?: string }): Promise<string | null>;
+  updateWorkingMemory(args: {
+    threadId: string;
+    resourceId?: string;
+    workingMemory: string;
+  }): Promise<void>;
+}
+
+/**
+ * The candidate's prior coached sessions, for the coach prompt — every ledger entry
+ * except the current run's own (a `recoach` replay must not read its own session
+ * back as history).
+ */
+export async function readPriorSessions(params: {
+  memory: CandidateLedgerStore;
+  candidateId: string;
+  threadId: string;
+  runId: string;
+}): Promise<SessionSummary[]> {
+  const stored = await params.memory.getWorkingMemory({
+    resourceId: params.candidateId,
+    threadId: params.threadId,
+  });
+  const record = parseCandidateWorkingMemory(stored);
+  return (record?.sessions ?? []).filter((session) => session.runId !== params.runId);
+}
+
+/**
+ * Distill the coached session and upsert it into the candidate's ledger. Reads the
+ * stored record fresh (rather than reusing the pre-coach read) so a concurrent
+ * session's entry is not clobbered, and upserts by `runId` so a `recoach` replay
+ * updates its own entry instead of double-appending.
+ */
+export async function recordSessionInLedger(params: {
+  memory: CandidateLedgerStore;
+  candidateId: string;
+  threadId: string;
+  runId: string;
+  date: string;
+  roleContext: Parameters<typeof computeSessionSummary>[0]['roleContext'];
+  transcriptLength: number;
+  grade: SessionGrade;
+  coaching: CoachReport;
+}): Promise<void> {
+  const stored = await params.memory.getWorkingMemory({
+    resourceId: params.candidateId,
+    threadId: params.threadId,
+  });
+  const record = parseCandidateWorkingMemory(stored);
+  if (!record) return;
+
+  const summary = computeSessionSummary({
+    runId: params.runId,
+    date: params.date,
+    roleContext: params.roleContext,
+    transcriptLength: params.transcriptLength,
+    grade: params.grade,
+    coaching: params.coaching,
+  });
+
+  await params.memory.updateWorkingMemory({
+    resourceId: params.candidateId,
+    threadId: params.threadId,
+    workingMemory: JSON.stringify({
+      profile: record.profile,
+      sessions: upsertSessionSummary(record.sessions, summary),
+    }),
+  });
 }
 
 export const gradeStep = createStep({
@@ -140,12 +233,37 @@ export const coachStep = createStep({
   id: 'coach',
   inputSchema: gradedInterviewStateSchema,
   outputSchema: coachedInterviewStateSchema,
-  execute: async ({ inputData, mastra, requestContext }) => {
+  execute: async ({ inputData, mastra, requestContext, runId }) => {
+    const ledgerKey = {
+      memory: candidateMemory,
+      candidateId: inputData.candidateId,
+      threadId: inputData.threadId,
+      runId,
+    };
+    const priorSessions = await readPriorSessions(ledgerKey);
+
     const coaching = await createCoachReporter(mastra.getAgent('coach'), requestContext)(
       inputData.transcript,
       inputData.grade,
       inputData.targetLevel,
+      priorSessions,
     );
+
+    // The ledger is auxiliary to the coaching itself: a write fault must not discard
+    // a finished coach report, so it degrades to a logged warning.
+    try {
+      await recordSessionInLedger({
+        ...ledgerKey,
+        date: new Date().toISOString(),
+        roleContext: inputData.roleContext,
+        transcriptLength: inputData.transcript.length,
+        grade: inputData.grade,
+        coaching,
+      });
+    } catch (error) {
+      mastra.getLogger()?.warn('Could not record the session in the coaching ledger.', { error });
+    }
+
     return { ...inputData, coaching };
   },
 });

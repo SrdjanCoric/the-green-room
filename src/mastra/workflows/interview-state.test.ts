@@ -38,6 +38,9 @@ describe('reportedInterviewStateSchema', () => {
     const result = reportedInterviewStateSchema.safeParse({
       profile: candidateProfileSchema.parse({ name: 'Ada Lovelace' }),
       roleContext: roleContextSchema.parse({ role: 'Staff Engineer' }),
+      candidateId: 'candidate-state-test',
+      candidateIdOrigin: 'default',
+      threadId: 'thread-state-test',
       researchUrls: [],
       companyBrief: EMPTY_COMPANY_BRIEF,
       targetLevel: 'senior',
@@ -66,6 +69,9 @@ describe('reportedInterviewStateSchema', () => {
     const result = reportedInterviewStateSchema.safeParse({
       profile: candidateProfileSchema.parse({ name: 'Ada Lovelace' }),
       roleContext: roleContextSchema.parse({ role: 'Staff Engineer' }),
+      candidateId: 'candidate-state-test',
+      candidateIdOrigin: 'default',
+      threadId: 'thread-state-test',
       researchUrls: [],
       companyBrief: EMPTY_COMPANY_BRIEF,
       targetLevel: 'senior',

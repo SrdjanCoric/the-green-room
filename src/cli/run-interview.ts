@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import type { CandidateProfile } from '../mastra/schemas/candidate-profile';
 import type { CompanyBrief } from '../mastra/schemas/company-brief';
 import type { TranscriptEntry } from '../mastra/schemas/interview';
@@ -57,22 +55,6 @@ export async function resolveJobPosting(
     }
     throw error;
   }
-}
-
-/**
- * Resolve the candidate (`resourceId`) and session (`threadId`) ids for a run.
- * Both default to a fresh id: because working memory is resource-scoped, a shared
- * default would let one candidate's ingest overwrite another's. Pass `--candidate`
- * to pin a stable id across runs (e.g. to resume a session later).
- */
-export function resolveIngestIds(options: {
-  resourceId?: string;
-  threadId?: string;
-}): { resourceId: string; threadId: string } {
-  return {
-    resourceId: options.resourceId ?? randomUUID(),
-    threadId: options.threadId ?? randomUUID(),
-  };
 }
 
 /** Render a candidate profile as a readable multi-line summary for the CLI. */

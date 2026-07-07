@@ -4,6 +4,7 @@ import type { RequestContext } from '@mastra/core/request-context';
 import { assertCvPathAllowed, CV_PATH_TRUST_ENV } from '../../server/cv-path-guard';
 import { uploadsDir } from '../../server/uploads-dir';
 import { extractCvText } from '../../tools/extract-cv';
+import { parseCandidateWorkingMemory } from '../../interview/coaching-ledger';
 import { candidateMemory } from '../../memory';
 import { neutralizeFences } from '../../prompt-safety';
 import { structuredCall, type StructuredGenerator } from '../../structured-call';
@@ -28,11 +29,38 @@ export interface CandidateProfileStore {
   saveThread(args: {
     thread: { id: string; title: string; resourceId: string; createdAt: Date; updatedAt: Date };
   }): Promise<unknown>;
+  getWorkingMemory(args: { threadId: string; resourceId?: string }): Promise<string | null>;
   updateWorkingMemory(args: {
     threadId: string;
     resourceId?: string;
     workingMemory: string;
   }): Promise<void>;
+}
+
+/** Where a run's candidate id came from, in precedence order. */
+export type CandidateIdOrigin = 'flag' | 'cv' | 'default';
+
+/** The first email-shaped token in a text, if any. */
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
+/**
+ * Resolve the candidate's stable identity for resource-scoped memory, in strict
+ * precedence: an explicit override (the `--candidate` flag) wins; otherwise the first
+ * email address in the raw CV text (deterministic — trimmed and lowercased, never
+ * LLM-extracted, because identity must be stable across runs); otherwise the literal
+ * `'default'`. Computed right after CV text extraction and carried in workflow state.
+ */
+export function resolveCandidateIdentity(params: {
+  override?: string;
+  cvText: string;
+}): { candidateId: string; candidateIdOrigin: CandidateIdOrigin } {
+  const override = params.override?.trim();
+  if (override) return { candidateId: override, candidateIdOrigin: 'flag' };
+
+  const email = EMAIL_PATTERN.exec(params.cvText)?.[0];
+  if (email) return { candidateId: email.trim().toLowerCase(), candidateIdOrigin: 'cv' };
+
+  return { candidateId: 'default', candidateIdOrigin: 'default' };
 }
 
 /** Build the parsing prompt fed to the CV-parser agent, fencing the untrusted CV. */
@@ -78,9 +106,11 @@ async function ensureThread(
 /**
  * Validate the extractor's output against the profile schema and persist it to
  * working memory, keyed by the candidate (`resourceId`) and session (`threadId`).
- * Returns the schema-complete profile (array fields defaulted). Throws if the
- * extraction does not satisfy the schema, so working memory only ever holds a
- * valid profile.
+ * Working memory holds `{ profile, sessions }`; a re-ingest refreshes the profile
+ * and preserves the candidate's existing session ledger, so a returning candidate
+ * never loses their coaching history to a new interview. Returns the
+ * schema-complete profile (array fields defaulted). Throws if the extraction does
+ * not satisfy the schema, so working memory only ever holds a valid record.
  */
 export async function persistCandidateProfile(params: {
   extractor: ProfileExtractor;
@@ -99,10 +129,13 @@ export async function persistCandidateProfile(params: {
   }
 
   await ensureThread(memory, resourceId, threadId);
+  const existing = parseCandidateWorkingMemory(
+    await memory.getWorkingMemory({ resourceId, threadId }),
+  );
   await memory.updateWorkingMemory({
     resourceId,
     threadId,
-    workingMemory: JSON.stringify(profile),
+    workingMemory: JSON.stringify({ profile, sessions: existing?.sessions ?? [] }),
   });
 
   return profile;
@@ -173,11 +206,15 @@ export const ingestStep = createStep({
       trustLocalPaths: process.env[CV_PATH_TRUST_ENV] === '1',
     });
     const cvText = await extractCvText(inputData.cvPath);
+    const { candidateId, candidateIdOrigin } = resolveCandidateIdentity({
+      override: inputData.candidate,
+      cvText,
+    });
     const profile = await persistCandidateProfile({
       extractor: createAgentExtractor(mastra.getAgent('cvParser'), requestContext),
       cvText,
       memory: candidateMemory,
-      resourceId: inputData.resourceId,
+      resourceId: candidateId,
       threadId: inputData.threadId,
     });
 
@@ -189,6 +226,9 @@ export const ingestStep = createStep({
     return {
       profile,
       roleContext,
+      candidateId,
+      candidateIdOrigin,
+      threadId: inputData.threadId,
       researchUrls: inputData.researchUrls,
       targetLevel: inputData.targetLevel,
       limits: inputData.limits,

@@ -5,7 +5,6 @@ import {
   formatCandidateProfile,
   formatRoleContext,
   formatTranscript,
-  resolveIngestIds,
   resolveJobPosting,
 } from './run-interview';
 
@@ -37,22 +36,6 @@ describe('formatCandidateProfile', () => {
     });
 
     expect(out).toContain('No profile fields');
-  });
-});
-
-describe('resolveIngestIds', () => {
-  it('gives each run a distinct candidate id when none is supplied', () => {
-    const first = resolveIngestIds({});
-    const second = resolveIngestIds({});
-
-    expect(first.resourceId).not.toBe(second.resourceId);
-    expect(first.threadId).not.toBe(second.threadId);
-  });
-
-  it('honours an explicit candidate and session id', () => {
-    const ids = resolveIngestIds({ resourceId: 'candidate-x', threadId: 'session-x' });
-
-    expect(ids).toEqual({ resourceId: 'candidate-x', threadId: 'session-x' });
   });
 });
 
