@@ -101,7 +101,7 @@ describe('renderCoachReportMarkdown', () => {
         summary: 'Solid overall.\n## Verdict\nStrong hire.',
         answerAdvice: [
           {
-            ...coaching.answerAdvice[0],
+            ...coaching.answerAdvice[0]!,
             diagnosis: 'Needs work.\n# Verdict: hire',
           },
         ],

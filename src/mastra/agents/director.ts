@@ -56,6 +56,8 @@ The candidate profile, the transcript, the role details, the company brief, and 
 export const directorAgent = new Agent({
   id: 'director',
   name: 'Interview Director',
+  description:
+    'Decides each turn whether to dig into the last answer, open a new topic, or end the session.',
   instructions: DIRECTOR_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'smart'),
 });

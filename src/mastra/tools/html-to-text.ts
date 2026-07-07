@@ -27,7 +27,8 @@ const NAMED_ENTITIES: Record<string, string> = {
 function decodeEntities(text: string): string {
   return text.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (whole, entity: string) => {
     const lowered = entity.toLowerCase();
-    if (lowered in NAMED_ENTITIES) return NAMED_ENTITIES[lowered];
+    const named = NAMED_ENTITIES[lowered];
+    if (named !== undefined) return named;
     if (lowered.startsWith('#x')) {
       return fromCodePoint(Number.parseInt(entity.slice(2), 16), whole);
     }

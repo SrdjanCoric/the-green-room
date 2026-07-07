@@ -1,6 +1,7 @@
 import { createStep } from '@mastra/core/workflows';
 import type { RequestContext } from '@mastra/core/request-context';
 
+import { describeError } from '../../errors';
 import { RESEARCH_FETCH_TOOL_KEY } from '../../tools/fetch-research-page';
 import {
   structuredCall,
@@ -93,6 +94,8 @@ export async function buildCompanyBrief(params: {
   roleContext: RoleContext;
   researchUrls?: string[];
   timeoutMs?: number;
+  /** Where to report a swallowed research failure; the degradation itself stays silent to the run. */
+  logger?: { warn(message: string): void };
 }): Promise<CompanyBrief> {
   // Cancel the research call when the timeout wins the race, so a slow `generate` (and
   // its in-flight LLM call) is torn down rather than left running past the empty brief.
@@ -108,7 +111,10 @@ export async function buildCompanyBrief(params: {
     return companyBriefSchema.parse(
       await withTimeout(research, params.timeoutMs ?? DEFAULT_RESEARCH_TIMEOUT_MS, () => controller.abort()),
     );
-  } catch {
+  } catch (error) {
+    // Degrading to an empty brief is deliberate (research is never fatal), but the
+    // cause must not be invisible to an operator reading the logs.
+    params.logger?.warn(`Company research failed; continuing with an empty brief: ${describeError(error)}`);
     return EMPTY_COMPANY_BRIEF;
   }
 }
@@ -143,6 +149,7 @@ export const researchStep = createStep({
       builder: createResearchBriefBuilder(mastra.getAgent('research'), requestContext),
       roleContext: inputData.roleContext,
       researchUrls: inputData.researchUrls,
+      logger: mastra.getLogger(),
     });
 
     return { ...inputData, companyBrief };

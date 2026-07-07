@@ -21,18 +21,17 @@ export interface IngestResult {
 }
 
 /**
- * Chunk a markdown document into retrieval-sized passages. The recursive strategy
- * splits on markdown structure first (paragraphs, then lines, then words), keeping
- * each answer-craft point whole where it can, then bounds the size so an embedding
+ * Chunk a markdown document into retrieval-sized passages. The markdown-native
+ * strategy splits on document structure (headings, then paragraphs), keeping each
+ * answer-craft point whole where it can, then bounds the size so an embedding
  * captures one focused idea. Empty chunks are dropped so nothing blank is embedded.
  */
 export async function chunkMarkdown(markdown: string): Promise<string[]> {
   const doc = MDocument.fromMarkdown(markdown);
   const chunks = await doc.chunk({
-    strategy: 'recursive',
+    strategy: 'markdown',
     maxSize: 800,
     overlap: 100,
-    separators: ['\n\n', '\n', ' '],
   });
   return chunks.map((chunk) => chunk.text).filter((text) => text.trim().length > 0);
 }

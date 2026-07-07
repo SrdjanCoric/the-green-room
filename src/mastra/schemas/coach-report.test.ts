@@ -77,7 +77,7 @@ describe('sessionGradeForTranscriptSchema', () => {
       ],
     });
 
-    expect(parsed.skipped[0].turnIndex).toBe(1);
+    expect(parsed.skipped[0]!.turnIndex).toBe(1);
   });
 
   it('rejects missing, duplicate, and out-of-range turn coverage', () => {
@@ -120,8 +120,8 @@ describe('coachReportSchema', () => {
     });
 
     expect(parsed.answerAdvice).toHaveLength(1);
-    expect(parsed.answerAdvice[0].question).toContain('technical decision');
-    expect(parsed.drills[0].focus).toBe('Quantifying results');
+    expect(parsed.answerAdvice[0]!.question).toContain('technical decision');
+    expect(parsed.drills[0]!.focus).toBe('Quantifying results');
   });
 
   it('defaults advice and drills to empty and keeps the study plan a string', () => {

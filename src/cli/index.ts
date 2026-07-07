@@ -1,9 +1,9 @@
-#!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 
 import * as p from '@clack/prompts';
 import { Command, InvalidArgumentError } from 'commander';
 
+import { describeError } from '../mastra/errors';
 import { mastra } from '../mastra/index';
 import { limitsWithMaxQuestions } from '../mastra/interview/interview-caps';
 import { buildModelRequestContext, resolveModelTiers } from '../mastra/model-config';
@@ -50,6 +50,17 @@ function interviewWorkflow(): InterviewWorkflowHandle {
 }
 
 /**
+ * Thrown when the operator cancels an interactive prompt. Unwinds to the command's
+ * catch, which exits quietly — the run stays suspended and resumable.
+ */
+class PromptCancelledError extends Error {
+  constructor() {
+    super('Cancelled.');
+    this.name = 'PromptCancelledError';
+  }
+}
+
+/**
  * Terminal prompt callbacks shared by the `interview` and `resume` commands: a single
  * line for the target level, and a multi-line answer (ended with `/done`) per question.
  */
@@ -62,7 +73,8 @@ function terminalPrompts(): {
       const answer = await p.text({ message: prompt, placeholder: 'senior' });
       if (p.isCancel(answer)) {
         p.cancel('Cancelled.');
-        process.exit(0);
+        process.exitCode = 0;
+        throw new PromptCancelledError();
       }
       return String(answer).trim() || 'senior';
     },
@@ -151,7 +163,7 @@ program
           postingText = resolvedJob.postingText;
           researchUrls = resolvedJob.researchUrls;
         } catch (error) {
-          p.cancel(error instanceof Error ? error.message : String(error));
+          p.cancel(describeError(error));
           process.exitCode = 1;
           return;
         }
@@ -203,8 +215,9 @@ program
         reportInterview(result.result);
         p.outro(`Interview ${runId} finished. Resume anytime with \`resume\`.`);
       } catch (error) {
+        if (error instanceof PromptCancelledError) return;
         stopSpinner('Preparation failed.');
-        p.cancel(error instanceof Error ? error.message : String(error));
+        p.cancel(describeError(error));
         process.exitCode = 1;
       }
     },
@@ -251,7 +264,8 @@ program
       reportInterview(outcome.result.result);
       p.outro(`Interview ${runId} finished.`);
     } catch (error) {
-      p.cancel(error instanceof Error ? error.message : String(error));
+      if (error instanceof PromptCancelledError) return;
+      p.cancel(describeError(error));
       process.exitCode = 1;
     }
   });
@@ -314,7 +328,7 @@ async function replayReport(
     reportInterview(outcome.result.result);
     p.outro(`${labels.done} interview ${runId} — fresh report written.`);
   } catch (error) {
-    p.cancel(error instanceof Error ? error.message : String(error));
+    p.cancel(describeError(error));
     process.exitCode = 1;
   }
 }
@@ -366,7 +380,7 @@ program
       );
       p.outro(`${reports.length} report${reports.length === 1 ? '' : 's'} found.`);
     } catch (error) {
-      p.cancel(error instanceof Error ? error.message : String(error));
+      p.cancel(describeError(error));
       process.exitCode = 1;
     }
   });
@@ -375,6 +389,6 @@ program
 // interactive prompt failing when there is no TTY — so the CLI exits cleanly
 // instead of crashing with an unhandled rejection.
 program.parseAsync().catch((error) => {
-  p.cancel(error instanceof Error ? error.message : String(error));
+  p.cancel(describeError(error));
   process.exitCode = 1;
 });

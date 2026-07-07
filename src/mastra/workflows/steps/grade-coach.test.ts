@@ -33,7 +33,7 @@ describe('createSessionGrader', () => {
             object: {
               scores: [
                 {
-                  question: transcript[0].question,
+                  question: transcript[0]!.question,
                   turnIndex: 0,
                   rationale: 'Concrete enough for this slice.',
                   star: {
@@ -78,7 +78,7 @@ describe('createSessionGrader', () => {
             object: {
               scores: [
                 {
-                  question: transcript[0].question,
+                  question: transcript[0]!.question,
                   turnIndex: 0,
                   rationale: 'The answer has some evidence.',
                   star: {
@@ -133,7 +133,7 @@ describe('createCoachReporter', () => {
   const grade = {
     scores: [
       {
-        question: transcript[0].question,
+        question: transcript[0]!.question,
         turnIndex: 0,
         rationale: 'The answer has some evidence.',
         star: {
@@ -189,9 +189,9 @@ describe('createCoachReporter', () => {
 
     const report = await coach(transcript, grade, 'senior');
 
-    expect(report.answerAdvice[0].question).toBe('Tell me about a migration.');
-    expect(report.answerAdvice[0].fix).toContain('deploy time');
-    expect(report.drills[0].focus).toBe('Quantifying results');
+    expect(report.answerAdvice[0]!.question).toBe('Tell me about a migration.');
+    expect(report.answerAdvice[0]!.fix).toContain('deploy time');
+    expect(report.drills[0]!.focus).toBe('Quantifying results');
   });
 
   it('retries when the model returns no report, then accepts a valid one', async () => {

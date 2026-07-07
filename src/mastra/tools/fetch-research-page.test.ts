@@ -1,3 +1,4 @@
+import type { fetch as undiciFetch } from 'undici';
 import { describe, expect, it } from 'vitest';
 
 import { fetchResearchPage, type FetchResearchPageOptions } from './fetch-research-page';
@@ -5,15 +6,15 @@ import { UnsafePostingUrlError } from './safe-fetch';
 
 const globalLookup = async () => ['93.184.216.34'];
 
-const forbiddenFetch: typeof fetch = () => {
+const forbiddenFetch: typeof undiciFetch = () => {
   throw new Error('fetch should not have been called');
 };
 
-function fetchReturning(handler: (url: string) => Response): typeof fetch {
+function fetchReturning(handler: (url: string) => Response): typeof undiciFetch {
   return (async (input: string | URL | Request) => {
     const url = typeof input === 'string' ? input : input.toString();
     return handler(url);
-  }) as typeof fetch;
+  }) as unknown as typeof undiciFetch;
 }
 
 function html(body: string): Response {

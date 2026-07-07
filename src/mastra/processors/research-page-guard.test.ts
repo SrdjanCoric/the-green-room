@@ -136,11 +136,11 @@ describe('createResearchPageGuard', () => {
     expect(Array.isArray(returned)).toBe(true);
     expect(returned).toHaveLength(2);
     const rewritten = returned[1];
+    if (!rewritten) throw new Error('expected the rewritten message');
     expect(rewritten.id).toBe('m2');
     // The tool-invocation part survives with its callId — only the result text changes.
     const part = rewritten.content.parts[0];
-    expect(part.type).toBe('tool-invocation');
-    if (part.type !== 'tool-invocation') throw new Error('unreachable');
+    if (!part || part.type !== 'tool-invocation') throw new Error('expected a tool-invocation part');
     expect(part.toolInvocation.toolCallId).toBe('call-1');
     expect(part.toolInvocation.state).toBe('result');
     expect(resultText(rewritten)).toBe('neutralized page text');
@@ -158,9 +158,9 @@ describe('createResearchPageGuard', () => {
 
     // The pairing must survive even when the detector drops the message outright.
     expect(returned).toHaveLength(1);
-    const part = returned[0].content.parts[0];
-    expect(part.type).toBe('tool-invocation');
-    expect(resultText(returned[0])).toBe(WITHHELD_PAGE_TEXT);
+    const part = returned[0]!.content.parts[0];
+    expect(part?.type).toBe('tool-invocation');
+    expect(resultText(returned[0]!)).toBe(WITHHELD_PAGE_TEXT);
   });
 
   it('returns nothing when every page is clean, leaving the messages untouched', async () => {
@@ -168,7 +168,7 @@ describe('createResearchPageGuard', () => {
     const messages = [toolResultMessage({ id: 'm1', toolCallId: 'call-1', text: 'a plain about page' })];
 
     expect(await runStep(guardWith(scanner), messages)).toBeUndefined();
-    expect(resultText(messages[0])).toBe('a plain about page');
+    expect(resultText(messages[0]!)).toBe('a plain about page');
   });
 
   it('scans each tool result once, tracking already-scanned ids in the per-request state', async () => {
@@ -191,7 +191,7 @@ describe('createResearchPageGuard', () => {
     const { scanner, scans } = fakeScanner();
     const pending = toolResultMessage({ id: 'm1', toolCallId: 'call-1', text: 'not done yet' });
     const part = pending.content.parts[0];
-    if (part.type === 'tool-invocation') part.toolInvocation.state = 'call';
+    if (part?.type === 'tool-invocation') part.toolInvocation.state = 'call';
     const messages = [
       textMessage('m2', 'INJECT in a trusted prompt is not this guard’s channel'),
       toolResultMessage({ id: 'm3', toolCallId: 'call-3', text: 'INJECT', toolName: 'someOtherTool' }),
