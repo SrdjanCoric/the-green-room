@@ -66,6 +66,15 @@ export const DEFAULT_CAP_LIMITS: CapLimits = capLimitsSchema.parse({
 /** The zeroed coverage state a fresh interview starts from. */
 export const INITIAL_COVERAGE: CoverageState = coverageStateSchema.parse({});
 
+/**
+ * A cheap, dependency-free token estimate (~4 characters per token). Good enough to
+ * enforce the coarse token-budget cap without pulling in a tokenizer; the exact model
+ * accounting lives in observability, not here.
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
 /** The kind of question the loop is about to ask; each kind answers to a different cap. */
 export type QuestionKind = 'new' | 'follow-up' | 'reprompt';
 

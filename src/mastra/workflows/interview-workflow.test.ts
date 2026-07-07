@@ -10,7 +10,7 @@ import { fetchResearchPage } from '../tools/fetch-research-page';
 import {
   capLimitsSchema,
   coverageStateSchema,
-  INITIAL_COVERAGE,
+  estimateTokens,
 } from './interview-caps';
 import {
   RESEARCH_FETCH_BUDGET,
@@ -20,11 +20,8 @@ import {
   createResearchFetchBudgetHooks,
   createResearchBriefBuilder,
   createRoleContextBuilder,
-  estimateTokens,
   interviewComplete,
   persistCandidateProfile,
-  placeholderQuestion,
-  recordTurn,
 } from './interview-workflow';
 
 const cannedProfile = {
@@ -134,58 +131,10 @@ describe('persistCandidateProfile', () => {
   });
 });
 
-describe('placeholderQuestion', () => {
-  it('numbers the placeholder question so successive turns are distinguishable', () => {
-    expect(placeholderQuestion(1)).toContain('1');
-    expect(placeholderQuestion(2)).not.toBe(placeholderQuestion(1));
-  });
-});
-
 describe('estimateTokens', () => {
   it('grows with the length of the text and is zero for empty text', () => {
     expect(estimateTokens('')).toBe(0);
     expect(estimateTokens('a'.repeat(40))).toBeGreaterThan(estimateTokens('a'.repeat(4)));
-  });
-});
-
-describe('recordTurn', () => {
-  const limits = capLimitsSchema.parse({
-    maxQuestions: 3,
-    maxConsecutiveFollowUps: 2,
-    maxReprompts: 1,
-    tokenBudget: 1000,
-  });
-
-  it('appends the exchange to the transcript and advances the question count', () => {
-    const next = recordTurn(
-      { transcript: [], coverage: INITIAL_COVERAGE, limits },
-      { question: 'Tell me about a challenge.', answer: 'I shipped the thing.' },
-    );
-
-    expect(next.transcript).toEqual([
-      { question: 'Tell me about a challenge.', answer: 'I shipped the thing.' },
-    ]);
-    expect(next.coverage.questionCount).toBe(1);
-    expect(next.coverage.tokensUsed).toBeGreaterThan(0);
-  });
-
-  it('does not mutate the state it is given', () => {
-    const state = { transcript: [], coverage: INITIAL_COVERAGE, limits };
-    recordTurn(state, { question: 'Q', answer: 'A' });
-
-    expect(state.transcript).toEqual([]);
-    expect(state.coverage.questionCount).toBe(0);
-  });
-
-  it('accumulates across turns', () => {
-    const first = recordTurn(
-      { transcript: [], coverage: INITIAL_COVERAGE, limits },
-      { question: 'Q1', answer: 'A1' },
-    );
-    const second = recordTurn(first, { question: 'Q2', answer: 'A2' });
-
-    expect(second.transcript.map((entry) => entry.question)).toEqual(['Q1', 'Q2']);
-    expect(second.coverage.questionCount).toBe(2);
   });
 });
 
@@ -199,21 +148,13 @@ describe('interviewComplete', () => {
 
   it('is false while the question cap has headroom', () => {
     expect(
-      interviewComplete({
-        transcript: [],
-        coverage: coverageStateSchema.parse({ questionCount: 1 }),
-        limits,
-      }),
+      interviewComplete({ coverage: coverageStateSchema.parse({ questionCount: 1 }), limits }),
     ).toBe(false);
   });
 
   it('is true once the question cap is reached', () => {
     expect(
-      interviewComplete({
-        transcript: [],
-        coverage: coverageStateSchema.parse({ questionCount: 2 }),
-        limits,
-      }),
+      interviewComplete({ coverage: coverageStateSchema.parse({ questionCount: 2 }), limits }),
     ).toBe(true);
   });
 });

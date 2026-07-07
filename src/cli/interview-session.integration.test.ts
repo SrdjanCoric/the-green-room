@@ -7,15 +7,18 @@ import { createWorkflow } from '@mastra/core/workflows';
 import { LibSQLStore } from '@mastra/libsql';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { answerAssessmentSchema } from '../mastra/schemas/answer-assessment';
 import { candidateProfileSchema } from '../mastra/schemas/candidate-profile';
 import { EMPTY_COMPANY_BRIEF } from '../mastra/schemas/company-brief';
+import { directorDecisionSchema } from '../mastra/schemas/director-decision';
 import { roleContextSchema } from '../mastra/schemas/role-context';
+import type { BrainFactory } from '../mastra/workflows/adaptive-brain';
 import { capLimitsSchema } from '../mastra/workflows/interview-caps';
 import {
   collectLevelStep,
+  createInterviewTurnStep,
   interviewLoopDone,
   interviewStateSchema,
-  interviewTurnStep,
   researchOutputSchema,
 } from '../mastra/workflows/interview-workflow';
 import {
@@ -24,6 +27,24 @@ import {
   runInterview,
   type InterviewWorkflowHandle,
 } from './interview-session';
+
+// A deterministic brain so the durable CLI path runs without any model calls: each turn
+// opens a fresh topic, and the assessor returns a fixed read.
+const fakeBrainFactory: BrainFactory = () => ({
+  decide: async (state) =>
+    directorDecisionSchema.parse({
+      action: 'new_topic',
+      subject: `topic ${state.coverage.questionCount + 1}`,
+    }),
+  question: async (state) => `Question ${state.coverage.questionCount + 1}`,
+  assess: async () =>
+    answerAssessmentSchema.parse({
+      star: { situation: true, task: true, action: true, result: true, quantifiedResult: false },
+      sufficientSignal: false,
+    }),
+});
+
+const interviewTurnStep = createInterviewTurnStep(fakeBrainFactory);
 
 // The real interview-loop steps on a real (in-memory) durable store, seeded past
 // ingest/research so no models are called — the same durable path the CLI drives.
