@@ -9,6 +9,11 @@ import { extractCvText } from '../tools/extract-cv';
 import { RESEARCH_FETCH_TOOL_KEY } from '../tools/fetch-research-page';
 import { candidateMemory } from '../memory';
 import {
+  structuredCall,
+  type GenerateToolHooks,
+  type StructuredGenerator,
+} from '../structured-call';
+import {
   candidateProfileSchema,
   type CandidateProfile,
 } from '../schemas/candidate-profile';
@@ -68,23 +73,6 @@ export interface CandidateProfileStore {
     resourceId?: string;
     workingMemory: string;
   }): Promise<void>;
-}
-
-/**
- * The precise slice of an agent's `generate` this step calls: structured output
- * against the profile schema, driven by the run's request context. Typing the
- * options concretely (rather than `unknown`) means a wrong `structuredOutput`
- * shape or a renamed option is caught at the call site; the real Mastra `Agent`
- * satisfies it structurally.
- */
-export interface StructuredProfileGenerator {
-  generate(
-    prompt: string,
-    options: {
-      structuredOutput: { schema: typeof candidateProfileSchema };
-      requestContext: RequestContext;
-    },
-  ): Promise<{ object?: CandidateProfile }>;
 }
 
 /** Build the parsing prompt fed to the CV-parser agent, fencing the untrusted CV. */
@@ -162,35 +150,13 @@ export async function persistCandidateProfile(params: {
 
 /** Real extractor: run the CV-parser agent with structured output on the fast tier. */
 export function createAgentExtractor(
-  agent: StructuredProfileGenerator,
+  agent: StructuredGenerator,
   requestContext: RequestContext,
 ): ProfileExtractor {
-  return async (cvText) => {
-    const result = await agent.generate(buildCvParsePrompt(cvText), {
-      structuredOutput: { schema: candidateProfileSchema },
-      requestContext,
+  return async (cvText) =>
+    structuredCall(agent, buildCvParsePrompt(cvText), candidateProfileSchema, requestContext, {
+      description: 'CV parser',
     });
-    if (!result.object) {
-      throw new Error('CV parser returned no structured profile.');
-    }
-    return result.object;
-  };
-}
-
-/**
- * The slice of the role-builder agent's `generate` the ingest step calls: structured
- * output against the role-context schema, driven by the run's request context. Typed
- * concretely so a wrong `structuredOutput` shape is caught at the call site; the real
- * Mastra `Agent` satisfies it structurally.
- */
-export interface StructuredRoleContextGenerator {
-  generate(
-    prompt: string,
-    options: {
-      structuredOutput: { schema: typeof roleContextSchema };
-      requestContext: RequestContext;
-    },
-  ): Promise<{ object?: RoleContext }>;
 }
 
 /** Build the prompt fed to the role-builder agent, fencing the untrusted posting. */
@@ -205,19 +171,13 @@ export type RoleContextBuilder = (postingText: string) => Promise<RoleContext>;
 
 /** Real builder: run the role-builder agent with structured output on the fast tier. */
 export function createRoleContextBuilder(
-  agent: StructuredRoleContextGenerator,
+  agent: StructuredGenerator,
   requestContext: RequestContext,
 ): RoleContextBuilder {
-  return async (postingText) => {
-    const result = await agent.generate(buildRoleContextPrompt(postingText), {
-      structuredOutput: { schema: roleContextSchema },
-      requestContext,
+  return async (postingText) =>
+    structuredCall(agent, buildRoleContextPrompt(postingText), roleContextSchema, requestContext, {
+      description: 'role builder',
     });
-    if (!result.object) {
-      throw new Error('Role builder returned no structured role context.');
-    }
-    return result.object;
-  };
 }
 
 /**
@@ -235,26 +195,6 @@ export async function buildRoleContext(params: {
 }
 
 export const RESEARCH_FETCH_BUDGET = 3;
-
-export interface StructuredResearchBriefGenerator {
-  generate(
-    prompt: string,
-    options: {
-      structuredOutput: { schema: typeof companyBriefSchema };
-      requestContext: RequestContext;
-      maxSteps: number;
-      hooks: {
-        beforeToolCall: (context: { toolName: string }) =>
-          | void
-          | {
-              proceed: false;
-              output: { text: string; url: string };
-            };
-      };
-      abortSignal?: AbortSignal;
-    },
-  ): Promise<{ object?: CompanyBrief }>;
-}
 
 export interface ResearchBriefInput {
   roleContext: RoleContext;
@@ -289,14 +229,9 @@ ${urls}
 Use the ${RESEARCH_FETCH_TOOL_KEY} tool for public company pages only when the prompt or role context gives you a public URL. Do not guess URLs. Use at most ${RESEARCH_FETCH_BUDGET} fetches. If you cannot find public context, return an empty summary, facts, and sources.`;
 }
 
-export function createResearchFetchBudgetHooks(maxFetches: number = RESEARCH_FETCH_BUDGET): {
-  beforeToolCall: (context: { toolName: string }) =>
-    | void
-    | {
-        proceed: false;
-        output: { text: string; url: string };
-      };
-} {
+export function createResearchFetchBudgetHooks(
+  maxFetches: number = RESEARCH_FETCH_BUDGET,
+): GenerateToolHooks {
   let fetches = 0;
   return {
     beforeToolCall: ({ toolName }) => {
@@ -313,22 +248,16 @@ export function createResearchFetchBudgetHooks(maxFetches: number = RESEARCH_FET
 }
 
 export function createResearchBriefBuilder(
-  agent: StructuredResearchBriefGenerator,
+  agent: StructuredGenerator,
   requestContext: RequestContext,
 ): CompanyBriefBuilder {
-  return async (input, options) => {
-    const result = await agent.generate(buildResearchPrompt(input), {
-      structuredOutput: { schema: companyBriefSchema },
-      requestContext,
+  return async (input, options) =>
+    structuredCall(agent, buildResearchPrompt(input), companyBriefSchema, requestContext, {
+      description: 'research agent',
       maxSteps: RESEARCH_FETCH_BUDGET + 1,
       hooks: createResearchFetchBudgetHooks(),
       abortSignal: options?.abortSignal,
     });
-    if (!result.object) {
-      throw new Error('Research agent returned no structured company brief.');
-    }
-    return result.object;
-  };
 }
 
 export async function buildCompanyBrief(params: {
@@ -375,26 +304,6 @@ async function withTimeout<T>(
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-}
-
-export interface StructuredSessionGradeGenerator {
-  generate(
-    prompt: string,
-    options: {
-      structuredOutput: { schema: z.ZodType<SessionGrade> };
-      requestContext: RequestContext;
-    },
-  ): Promise<{ object?: unknown }>;
-}
-
-export interface StructuredCoachReportGenerator {
-  generate(
-    prompt: string,
-    options: {
-      structuredOutput: { schema: typeof coachReportSchema };
-      requestContext: RequestContext;
-    },
-  ): Promise<{ object?: CoachReport }>;
 }
 
 export type SessionGrader = (
@@ -462,7 +371,7 @@ export function buildCoachPrompt(
 }
 
 export function createSessionGrader(
-  agent: StructuredSessionGradeGenerator,
+  agent: StructuredGenerator,
   requestContext: RequestContext,
   maxAttempts = 3,
 ): SessionGrader {
@@ -471,26 +380,19 @@ export function createSessionGrader(
       return sessionGradeForTranscriptSchema(0).parse({ scores: [], skipped: [] });
     }
 
+    // The per-transcript schema enforces the coverage contract — every turn scored
+    // exactly once — so a grade that misses or doubles a turn is retried with the
+    // violation spelled out, not accepted.
     const schema = sessionGradeForTranscriptSchema(transcript.length);
-    let lastError: unknown;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const result = await agent.generate(buildGraderPrompt(transcript, targetLevel), {
-        structuredOutput: { schema },
-        requestContext,
-      });
-      try {
-        if (!result.object) throw new Error('Grader returned no structured session grade.');
-        return schema.parse(result.object);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError instanceof Error ? lastError : new Error('Could not grade the session.');
+    return structuredCall(agent, buildGraderPrompt(transcript, targetLevel), schema, requestContext, {
+      description: 'grader',
+      attempts: maxAttempts,
+    });
   };
 }
 
 export function createCoachReporter(
-  agent: StructuredCoachReportGenerator,
+  agent: StructuredGenerator,
   requestContext: RequestContext,
   maxAttempts = 3,
 ): CoachReporter {
@@ -500,22 +402,14 @@ export function createCoachReporter(
     }
 
     // Coaching is keyed by the quoted question, not a turn index, so there is no
-    // cross-turn contract to validate — only the structured shape. Retry like the
-    // grader so a transient empty response doesn't discard a finished interview.
-    let lastError: unknown;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const result = await agent.generate(buildCoachPrompt(transcript, grade, targetLevel), {
-        structuredOutput: { schema: coachReportSchema },
-        requestContext,
-      });
-      try {
-        if (!result.object) throw new Error('Coach returned no structured coaching report.');
-        return coachReportSchema.parse(result.object);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError instanceof Error ? lastError : new Error('Could not coach the session.');
+    // cross-turn contract to validate — only the structured shape.
+    return structuredCall(
+      agent,
+      buildCoachPrompt(transcript, grade, targetLevel),
+      coachReportSchema,
+      requestContext,
+      { description: 'coach', attempts: maxAttempts },
+    );
   };
 }
 

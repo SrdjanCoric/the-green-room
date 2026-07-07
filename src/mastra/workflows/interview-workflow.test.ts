@@ -194,13 +194,20 @@ describe('createAgentExtractor', () => {
     expect(raw).toMatchObject({ name: 'Ada Lovelace' });
   });
 
-  it('throws when the model returns no structured object', async () => {
+  it('retries a missing structured object before giving up', async () => {
+    let calls = 0;
     const extractor = createAgentExtractor(
-      { generate: async () => ({ object: undefined }) },
+      {
+        generate: async () => {
+          calls += 1;
+          return { object: undefined };
+        },
+      },
       requestContext,
     );
 
-    await expect(extractor('cv text')).rejects.toThrow(/no structured profile/i);
+    await expect(extractor('cv text')).rejects.toThrow(/CV parser/i);
+    expect(calls).toBe(3);
   });
 });
 
@@ -236,13 +243,13 @@ describe('createRoleContextBuilder', () => {
     expect(role.company).toBe('Globex');
   });
 
-  it('throws when the model returns no structured role context', async () => {
+  it('retries a missing structured role context before giving up', async () => {
     const builder = createRoleContextBuilder(
       { generate: async () => ({ object: undefined }) },
       requestContext,
     );
 
-    await expect(builder('some posting')).rejects.toThrow(/no structured role context/i);
+    await expect(builder('some posting')).rejects.toThrow(/role builder/i);
   });
 });
 
@@ -336,7 +343,7 @@ describe('createResearchBriefBuilder', () => {
     expect(seenSignal).toBe(controller.signal);
   });
 
-  it('throws when the model returns no structured company brief', async () => {
+  it('retries a missing structured company brief before giving up', async () => {
     const builder = createResearchBriefBuilder(
       { generate: async () => ({ object: undefined }) },
       requestContext,
@@ -347,7 +354,7 @@ describe('createResearchBriefBuilder', () => {
         roleContext: roleContextSchema.parse({ company: 'Globex', role: 'Staff Engineer' }),
         researchUrls: [],
       }),
-    ).rejects.toThrow(/no structured company brief/i);
+    ).rejects.toThrow(/research agent/i);
   });
 });
 

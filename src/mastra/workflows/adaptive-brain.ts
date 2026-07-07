@@ -13,6 +13,12 @@ import {
   type DirectorAction,
   type DirectorDecision,
 } from '../schemas/director-decision';
+import {
+  structuredCall,
+  textCall,
+  type StructuredGenerator,
+  type TextGenerator,
+} from '../structured-call';
 import type { TranscriptEntry } from '../schemas/interview';
 import type { RoleContext } from '../schemas/role-context';
 import {
@@ -269,37 +275,7 @@ export function buildAssessorPrompt(topic: string, transcript: TranscriptEntry[]
   );
 }
 
-// --- Agent boundaries: the exact slice of each agent's `generate` the loop calls. ---
-
-/** The director's structured-output generate call, typed so a wrong shape fails to compile. */
-export interface StructuredDirectorGenerator {
-  generate(
-    prompt: string,
-    options: {
-      structuredOutput: { schema: typeof directorDecisionSchema };
-      requestContext: RequestContext;
-    },
-  ): Promise<{ object?: DirectorDecision }>;
-}
-
-/** The interviewer's plain-text generate call. */
-export interface PlainTextGenerator {
-  generate(
-    prompt: string,
-    options: { requestContext: RequestContext },
-  ): Promise<{ text: string }>;
-}
-
-/** The assessor's structured-output generate call. */
-export interface StructuredAssessorGenerator {
-  generate(
-    prompt: string,
-    options: {
-      structuredOutput: { schema: typeof answerAssessmentSchema };
-      requestContext: RequestContext;
-    },
-  ): Promise<{ object?: AnswerAssessment }>;
-}
+// --- Agent boundaries: every call goes through the shared structured/text helpers. ---
 
 /** Decide the next move via the director agent, nudge flags folded into the prompt. */
 export type DirectorDecider = (state: BrainState, nudge: DirectorNudge) => Promise<DirectorDecision>;
@@ -312,45 +288,35 @@ export type AnswerAssessor = (topic: string, transcript: TranscriptEntry[]) => P
 
 /** Real director decider: run the director agent with structured output on the smart tier. */
 export function createDirectorDecider(
-  agent: StructuredDirectorGenerator,
+  agent: StructuredGenerator,
   requestContext: RequestContext,
 ): DirectorDecider {
-  return async (state, nudge) => {
-    const result = await agent.generate(buildDirectorPrompt(state, nudge), {
-      structuredOutput: { schema: directorDecisionSchema },
-      requestContext,
+  return async (state, nudge) =>
+    structuredCall(agent, buildDirectorPrompt(state, nudge), directorDecisionSchema, requestContext, {
+      description: 'director',
     });
-    if (!result.object) throw new Error('Director returned no structured decision.');
-    return result.object;
-  };
 }
 
 /** Real interviewer writer: run the interviewer agent on the fast tier and trim its text. */
 export function createInterviewerWriter(
-  agent: PlainTextGenerator,
+  agent: TextGenerator,
   requestContext: RequestContext,
 ): InterviewerWriter {
-  return async (state, decision) => {
-    const result = await agent.generate(buildInterviewerPrompt(state, decision), { requestContext });
-    const question = result.text.trim();
-    if (!question) throw new Error('Interviewer returned an empty question.');
-    return question;
-  };
+  return async (state, decision) =>
+    textCall(agent, buildInterviewerPrompt(state, decision), requestContext, {
+      description: 'interviewer',
+    });
 }
 
 /** Real assessor: run the assessor agent with structured output on the fast tier. */
 export function createAnswerAssessor(
-  agent: StructuredAssessorGenerator,
+  agent: StructuredGenerator,
   requestContext: RequestContext,
 ): AnswerAssessor {
-  return async (topic, transcript) => {
-    const result = await agent.generate(buildAssessorPrompt(topic, transcript), {
-      structuredOutput: { schema: answerAssessmentSchema },
-      requestContext,
+  return async (topic, transcript) =>
+    structuredCall(agent, buildAssessorPrompt(topic, transcript), answerAssessmentSchema, requestContext, {
+      description: 'assessor',
     });
-    if (!result.object) throw new Error('Assessor returned no structured assessment.');
-    return result.object;
-  };
 }
 
 /** The three agent-backed callables the interview turn drives, resolved per run. */

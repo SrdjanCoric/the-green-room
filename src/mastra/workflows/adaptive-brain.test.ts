@@ -243,11 +243,21 @@ describe('the agent-backed brain callables', () => {
     expect(decision.action).toBe('wrap_up');
   });
 
-  it('throws when the director returns no structured decision', async () => {
-    const decide = createDirectorDecider({ generate: async () => ({ object: undefined }) }, requestContext);
-    await expect(decide(state(), { followUpsExhausted: false, repromptsExhausted: false })).rejects.toThrow(
-      /no structured decision/i,
+  it('retries a director reply with no structured decision before giving up', async () => {
+    let calls = 0;
+    const decide = createDirectorDecider(
+      {
+        generate: async () => {
+          calls += 1;
+          return { object: undefined };
+        },
+      },
+      requestContext,
     );
+    await expect(decide(state(), { followUpsExhausted: false, repromptsExhausted: false })).rejects.toThrow(
+      /director/i,
+    );
+    expect(calls).toBe(3);
   });
 
   it('trims the interviewer question and rejects an empty one', async () => {
@@ -259,7 +269,7 @@ describe('the agent-backed brain callables', () => {
     const writeEmpty = createInterviewerWriter({ generate: async () => ({ text: '   ' }) }, requestContext);
     await expect(
       writeEmpty(state(), directorDecisionSchema.parse({ action: 'new_topic', subject: 't' })),
-    ).rejects.toThrow(/empty question/i);
+    ).rejects.toThrow(/interviewer/i);
   });
 
   it('asks the assessor for structured output against the assessment schema', async () => {
