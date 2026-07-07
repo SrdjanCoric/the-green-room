@@ -5,19 +5,41 @@ import { createWorkflow } from '@mastra/core/workflows';
 import { createWorkflowStateReader } from '@mastra/core/workflows';
 import { LibSQLStore } from '@mastra/libsql';
 
+import { answerAssessmentSchema } from '../schemas/answer-assessment';
 import { candidateProfileSchema } from '../schemas/candidate-profile';
 import { EMPTY_COMPANY_BRIEF } from '../schemas/company-brief';
+import { directorDecisionSchema } from '../schemas/director-decision';
 import { roleContextSchema } from '../schemas/role-context';
+import type { BrainFactory } from './adaptive-brain';
 import { capLimitsSchema } from './interview-caps';
 import {
   asInterviewSuspend,
   collectLevelStep,
+  createInterviewTurnStep,
   interviewLoopDone,
   interviewStateSchema,
-  interviewTurnStep,
   readSuspendPayload,
   researchOutputSchema,
 } from './interview-workflow';
+
+// A deterministic brain: each turn opens a fresh topic (so successive questions differ),
+// and the assessor returns a fixed read. This exercises the real loop mechanics —
+// decide → question → suspend/resume → assess → append — without any model calls.
+const fakeBrainFactory: BrainFactory = () => ({
+  decide: async (state) =>
+    directorDecisionSchema.parse({
+      action: 'new_topic',
+      subject: `topic ${state.coverage.questionCount + 1}`,
+    }),
+  question: async (state) => `Question ${state.coverage.questionCount + 1}`,
+  assess: async () =>
+    answerAssessmentSchema.parse({
+      star: { situation: true, task: true, action: true, result: true, quantifiedResult: false },
+      sufficientSignal: false,
+    }),
+});
+
+const interviewTurnStep = createInterviewTurnStep(fakeBrainFactory);
 
 // A self-contained workflow of the real interview-loop steps, backed by a real
 // (in-memory) LibSQL store so suspend/resume is genuinely durable — but seeded past
@@ -32,8 +54,29 @@ const loopWorkflow = createWorkflow({
   .dountil(interviewTurnStep, async (context) => interviewLoopDone(context))
   .commit();
 
+// A brain that wraps up on the first move, so the fresh pass ends the loop without ever
+// asking a question — the director-driven termination path, distinct from cap exhaustion.
+const wrapUpTurnStep = createInterviewTurnStep(() => ({
+  decide: async () => directorDecisionSchema.parse({ action: 'wrap_up' }),
+  question: async () => {
+    throw new Error('the interviewer must not be asked once the director has wrapped up');
+  },
+  assess: async () => {
+    throw new Error('the assessor must not run once the director has wrapped up');
+  },
+}));
+
+const wrapUpWorkflow = createWorkflow({
+  id: 'interviewWrapUpTest',
+  inputSchema: researchOutputSchema,
+  outputSchema: interviewStateSchema,
+})
+  .then(collectLevelStep)
+  .dountil(wrapUpTurnStep, async (context) => interviewLoopDone(context))
+  .commit();
+
 const mastra = new Mastra({
-  workflows: { loopWorkflow },
+  workflows: { loopWorkflow, wrapUpWorkflow },
   storage: new LibSQLStore({ id: 'loop-test', url: ':memory:' }),
 });
 
@@ -63,6 +106,20 @@ function seed(overrides: { targetLevel?: string } = {}) {
 }
 
 describe('interview turn loop', () => {
+  it('ends the loop without asking when the director wraps up, leaving the transcript empty', async () => {
+    const run = await mastra.getWorkflow('wrapUpWorkflow').createRun();
+    const result = await run.start({ inputData: seed({ targetLevel: 'senior' }) });
+
+    // A wrap_up on the first move ends the loop on the fresh pass: no suspension, no
+    // question, no assessment — the run completes straight away with nothing recorded.
+    expect(result.status).toBe('success');
+    if (result.status !== 'success') return;
+    expect(result.result.done).toBe(true);
+    expect(result.result.transcript).toEqual([]);
+    expect(result.result.assessments).toEqual([]);
+    expect(result.result.coverage.questionCount).toBe(0);
+  });
+
   it('suspends with the first question when the level is already set', async () => {
     const run = await mastra.getWorkflow('loopWorkflow').createRun();
     const result = await run.start({ inputData: seed({ targetLevel: 'senior' }) });
@@ -102,6 +159,12 @@ describe('interview turn loop', () => {
     expect(result.result.transcript).toHaveLength(2);
     expect(result.result.coverage.questionCount).toBe(2);
     expect(result.result.done).toBe(true);
+
+    // The assessor ran once per answered turn, appending to the log the director reads,
+    // each entry tagged with the topic that turn opened.
+    expect(result.result.assessments).toHaveLength(2);
+    expect(result.result.assessments.map((entry) => entry.topic)).toEqual(['topic 1', 'topic 2']);
+    expect(result.result.currentTopic).toBe('topic 2');
   });
 
   it('records the exact question that was asked, read back from suspend data on resume', async () => {
