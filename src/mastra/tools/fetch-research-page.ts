@@ -43,13 +43,6 @@ export interface FetchResearchPageOptions {
   signal?: AbortSignal;
 }
 
-export class PromptInjectionPageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'PromptInjectionPageError';
-  }
-}
-
 const defaultLookup: HostLookup = async (hostname) => {
   const { lookup } = await import('node:dns/promises');
   const results = await lookup(hostname, { all: true });
@@ -100,8 +93,11 @@ export async function fetchResearchPage(
       }
 
       const body = await readBodyCapped(response, maxBytes);
+      // This tool guards transport only: SSRF, redirects, size and character caps.
+      // Injection detection over the fetched content is the research agent's
+      // step-phase page guard (`createResearchPageGuard`), which judges intent
+      // instead of pattern-matching phrases.
       const text = htmlToText(body);
-      assertNoObviousPromptInjection(text);
       return { text: truncate(text, maxChars), url: currentUrl };
     } finally {
       await dispatcher?.destroy();
@@ -145,24 +141,6 @@ function truncate(text: string, maxChars: number): string {
   const sliced = text.slice(0, maxChars);
   const lastCode = sliced.charCodeAt(sliced.length - 1);
   return lastCode >= 0xd800 && lastCode <= 0xdbff ? sliced.slice(0, -1) : sliced;
-}
-
-const PROMPT_INJECTION_PATTERNS = [
-  /\bignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)\b/i,
-  /\bdisregard\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)\b/i,
-  /\bforget\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)\b/i,
-  /\boverride\s+(the\s+)?(system|developer)\s+(message|prompt|instructions)\b/i,
-  /\breveal\s+(the\s+)?(system|developer)\s+(message|prompt|instructions)\b/i,
-  /\byou\s+are\s+now\s+(in\s+)?developer\s+mode\b/i,
-  /\bexfiltrate\b/i,
-];
-
-export function assertNoObviousPromptInjection(text: string): void {
-  for (const pattern of PROMPT_INJECTION_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new PromptInjectionPageError('Research page appears to contain prompt-injection instructions.');
-    }
-  }
 }
 
 export const fetchResearchPageTool = createTool({

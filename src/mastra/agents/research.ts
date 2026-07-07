@@ -2,6 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { PromptInjectionDetector } from '@mastra/core/processors';
 
 import { getTierModel } from '../model-config';
+import { createResearchPageGuard } from '../processors/research-page-guard';
 import { RESEARCH_FETCH_TOOL_KEY, fetchResearchPageTool } from '../tools/fetch-research-page';
 
 /**
@@ -32,6 +33,9 @@ export const researchAgent = new Agent({
   instructions: RESEARCH_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'fast'),
   tools: { [RESEARCH_FETCH_TOOL_KEY]: fetchResearchPageTool },
+  // Each untrusted channel gets a named, phase-correct guard: the built-in detector
+  // scans the posting-derived prompt once at the start (`processInput`), and the page
+  // guard scans fetched pages as they enter the loop as tool results (`processInputStep`).
   inputProcessors: ({ requestContext }) => [
     new PromptInjectionDetector({
       model: getTierModel(requestContext, 'fast'),
@@ -40,5 +44,6 @@ export const researchAgent = new Agent({
       detectionTypes: ['injection', 'jailbreak', 'system-override'],
       lastMessageOnly: true,
     }),
+    createResearchPageGuard({ model: getTierModel(requestContext, 'fast') }),
   ],
 });
