@@ -81,6 +81,13 @@ export function createResearchBriefBuilder(
     });
 }
 
+/**
+ * Default research budget: the fetch budget allows up to 3 pages, and each fetched page
+ * costs an extra fast-tier detection call in the step-phase page guard, so the window
+ * leaves room for both the fetches and their scans.
+ */
+const DEFAULT_RESEARCH_TIMEOUT_MS = 30_000;
+
 export async function buildCompanyBrief(params: {
   builder: CompanyBriefBuilder;
   roleContext: RoleContext;
@@ -99,7 +106,7 @@ export async function buildCompanyBrief(params: {
       { abortSignal: controller.signal },
     );
     return companyBriefSchema.parse(
-      await withTimeout(research, params.timeoutMs ?? 15_000, () => controller.abort()),
+      await withTimeout(research, params.timeoutMs ?? DEFAULT_RESEARCH_TIMEOUT_MS, () => controller.abort()),
     );
   } catch {
     return EMPTY_COMPANY_BRIEF;
