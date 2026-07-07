@@ -8,8 +8,10 @@ data/
 *.db
 *.sqlite
 
-# Private knowledge corpus (only synthetic samples are committed)
-knowledge/
+# Private knowledge corpus (only synthetic samples are committed). Ignore the
+# corpus contents but re-include the samples directory — this must exclude children
+# (`knowledge/*`), not the directory itself, or the negation can't take effect.
+knowledge/*
 !knowledge/samples/
 
 # Secrets

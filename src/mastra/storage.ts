@@ -25,7 +25,12 @@ export function resolveDbUrl(moduleDir: string, override?: string): string {
   return `file:${join(moduleDir, '..', '..', 'data', 'mastra.db')}`;
 }
 
-const dbUrl = resolveDbUrl(
+/**
+ * The one resolved database URL for this process. Exported so sibling stores (e.g.
+ * the RAG vector index) can anchor their own file beside `mastra.db` in the same
+ * `./data/` directory rather than re-deriving the project root.
+ */
+export const dbUrl = resolveDbUrl(
   dirname(fileURLToPath(import.meta.url)),
   process.env.INTERVIEW_COACH_DB_URL,
 );
