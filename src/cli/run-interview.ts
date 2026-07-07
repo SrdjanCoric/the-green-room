@@ -1,13 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
-import { mastra } from '../mastra/index';
-import {
-  buildModelRequestContext,
-  resolveModelTiers,
-  type ModelTierOptions,
-} from '../mastra/model-config';
 import type { CandidateProfile } from '../mastra/schemas/candidate-profile';
 import type { CompanyBrief } from '../mastra/schemas/company-brief';
+import type { TranscriptEntry } from '../mastra/schemas/interview';
 import type { RoleContext } from '../mastra/schemas/role-context';
 import { capPostingText } from '../mastra/tools/fetch-posting';
 import {
@@ -15,26 +10,6 @@ import {
   resolvePosting,
   type ResolvePostingOptions,
 } from '../mastra/tools/resolve-posting';
-
-export interface IngestCvOptions extends ModelTierOptions {
-  /** Path to the CV file (.pdf, .txt, or .md). */
-  cvPath: string;
-  /** Resolved job-posting text; omit to run a generic behavioral interview. */
-  postingText?: string;
-  /** Public URLs the research step may fetch for company context. */
-  researchUrls?: string[];
-  /** Stable candidate id; keys resource-scoped working memory. Defaults to a fresh id. */
-  resourceId?: string;
-  /** Interview session id. Defaults to a fresh id per run. */
-  threadId?: string;
-}
-
-/** The outcome of an ingest run: the parsed candidate profile and the derived role context. */
-export interface IngestResult {
-  profile: CandidateProfile;
-  roleContext: RoleContext;
-  companyBrief: CompanyBrief;
-}
 
 export interface ResolveJobPostingOptions {
   /** The raw `--job` argument: a URL, a file path, or pasted text. */
@@ -98,57 +73,6 @@ export function resolveIngestIds(options: {
     resourceId: options.resourceId ?? randomUUID(),
     threadId: options.threadId ?? randomUUID(),
   };
-}
-
-/**
- * Drive the interview workflow's `ingest` step in-process — the same
- * `createRun` → `start` path a remote client would use over the Mastra server —
- * resolving the model tiers from the given options and injecting them via the
- * request context. Returns the parsed candidate profile.
- */
-export async function ingestCv(options: IngestCvOptions): Promise<IngestResult> {
-  const tiers = resolveModelTiers(options);
-  const requestContext = buildModelRequestContext(tiers);
-  const { resourceId, threadId } = resolveIngestIds(options);
-
-  const workflow = mastra.getWorkflow('interviewWorkflow');
-  const run = await workflow.createRun();
-  const result = await run.start({
-    inputData: {
-      cvPath: options.cvPath,
-      resourceId,
-      threadId,
-      postingText: options.postingText,
-      researchUrls: options.researchUrls ?? [],
-    },
-    requestContext,
-  });
-
-  if (result.status !== 'success') {
-    // Surface the real cause (bad path, unsupported type, schema/model error)
-    // rather than collapsing every failure into one opaque message. The workflow
-    // serializes the step error through storage, so it arrives as a plain
-    // `{ message }` object, not an `Error` instance.
-    const cause = result.status === 'failed' ? result.error : undefined;
-    const detail = errorMessageOf(cause) ?? `status: ${result.status}`;
-    throw new Error(`Interview ingest failed — ${detail}`, cause ? { cause } : undefined);
-  }
-
-  return {
-    profile: result.result.profile,
-    roleContext: result.result.roleContext,
-    companyBrief: result.result.companyBrief,
-  };
-}
-
-/** Pull a human message out of a workflow error, whether an `Error` or a serialized `{ message }`. */
-function errorMessageOf(cause: unknown): string | undefined {
-  if (cause instanceof Error) return cause.message;
-  if (cause && typeof cause === 'object' && 'message' in cause) {
-    const message = (cause as { message: unknown }).message;
-    if (typeof message === 'string') return message;
-  }
-  return undefined;
 }
 
 /** Render a candidate profile as a readable multi-line summary for the CLI. */
@@ -239,4 +163,17 @@ export function formatCompanyBrief(brief: CompanyBrief): string {
   }
 
   return lines.join('\n').trim();
+}
+
+/** Render the interview transcript as a readable Q/A summary for the CLI. */
+export function formatTranscript(transcript: TranscriptEntry[]): string {
+  if (transcript.length === 0) return 'No questions were asked.';
+
+  const lines: string[] = [];
+  transcript.forEach((entry, index) => {
+    if (index > 0) lines.push('');
+    lines.push(`Q${index + 1}: ${entry.question}`);
+    lines.push(`A${index + 1}: ${entry.answer}`);
+  });
+  return lines.join('\n');
 }
