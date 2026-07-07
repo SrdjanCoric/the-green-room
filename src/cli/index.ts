@@ -10,8 +10,12 @@ import {
   loadLastRun,
   reconnectInterview,
   readMultilineAnswer,
+  recoachSession,
+  regradeSession,
   runInterview,
   type InterviewWorkflowHandle,
+  type ReplayOutcome,
+  type ReplaySessionParams,
 } from './interview-session';
 import { listReports } from './reports';
 import {
@@ -216,6 +220,99 @@ program
       process.exitCode = 1;
     }
   });
+
+/** Model-tier flags shared by the `regrade`/`recoach` commands. */
+interface ReplayOptions {
+  provider?: string;
+  fastModel?: string;
+  smartModel?: string;
+}
+
+/**
+ * Shared action for `regrade`/`recoach`: resolve the run id (falling back to the most
+ * recent interview), build the model context, replay the grading phase via the given
+ * runner, and report the fresh result — mapping a missing or still-running interview to
+ * a clear message.
+ */
+async function replayReport(
+  runner: (params: ReplaySessionParams) => Promise<ReplayOutcome>,
+  session: string | undefined,
+  options: ReplayOptions,
+  labels: { verb: string; gerund: string; done: string },
+): Promise<void> {
+  p.intro('interview-coach');
+
+  const runId = session ?? (await loadLastRun())?.runId;
+  if (!runId) {
+    p.cancel(`No interview to ${labels.verb} — run one with \`interview\` first.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    const requestContext = buildModelRequestContext(resolveModelTiers(options));
+    const outcome = await runner({ workflow: interviewWorkflow(), runId, requestContext });
+
+    if (outcome.kind === 'not-found') {
+      p.cancel(`No interview run found for id ${runId}.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (outcome.kind === 'unfinished') {
+      p.cancel(`Interview ${runId} hasn't finished yet — resume it before ${labels.gerund}.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (outcome.kind === 'not-replayable') {
+      p.cancel(`Interview ${runId} didn't produce a gradeable session — nothing to ${labels.verb}.`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const failure = describeDriveFailure(outcome.result);
+    if (failure) {
+      p.cancel(failure);
+      process.exitCode = 1;
+      return;
+    }
+
+    reportInterview(outcome.result.result);
+    p.outro(`${labels.done} interview ${runId} — fresh report written.`);
+  } catch (error) {
+    p.cancel(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+program
+  .command('regrade')
+  .description('Re-grade a finished interview from its stored transcript, then re-coach and re-report.')
+  .argument('[session]', 'run id to re-grade (defaults to the most recent interview)')
+  .option('--provider <name>', 'model provider for both tiers (default: anthropic)')
+  .option('--fast-model <id>', 'model id for the fast tier')
+  .option('--smart-model <id>', 'model id for the smart tier (grader, coach)')
+  .action((session: string | undefined, options: ReplayOptions) =>
+    replayReport(regradeSession, session, options, {
+      verb: 're-grade',
+      gerund: 're-grading',
+      done: 'Re-graded',
+    }),
+  );
+
+program
+  .command('recoach')
+  .description('Re-coach a finished interview from its stored grade, then re-report.')
+  .argument('[session]', 'run id to re-coach (defaults to the most recent interview)')
+  .option('--provider <name>', 'model provider for both tiers (default: anthropic)')
+  .option('--fast-model <id>', 'model id for the fast tier')
+  .option('--smart-model <id>', 'model id for the smart tier (grader, coach)')
+  .action((session: string | undefined, options: ReplayOptions) =>
+    replayReport(recoachSession, session, options, {
+      verb: 're-coach',
+      gerund: 're-coaching',
+      done: 'Re-coached',
+    }),
+  );
 
 program
   .command('reports')
