@@ -28,7 +28,7 @@ import {
   reconnectInterview,
   runInterview,
   type InterviewWorkflowHandle,
-} from './interview-session';
+} from '../mastra/session/interview-session';
 
 // A deterministic brain so the durable CLI path runs without any model calls: each turn
 // opens a fresh topic, and the assessor returns a fixed read.

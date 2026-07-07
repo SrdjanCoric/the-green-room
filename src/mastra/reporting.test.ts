@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { CoachReport } from '../mastra/schemas/coach-report';
-import type { TranscriptEntry } from '../mastra/schemas/interview';
-import { renderCoachReportMarkdown, listReports, writeCoachReport } from './reports';
+import type { CoachReport } from './schemas/coach-report';
+import type { TranscriptEntry } from './schemas/interview';
+import { renderCoachReportMarkdown, listReports, writeCoachReport } from './reporting';
 
 let tempDir: string | undefined;
 
@@ -150,5 +150,31 @@ describe('writeCoachReport', () => {
     expect(second).not.toBe(first);
     await expect(readFile(first, 'utf8')).resolves.toBe('# First\n');
     await expect(readFile(second, 'utf8')).resolves.toBe('# Second\n');
+  });
+
+  it('embeds the run id in the filename so a report traces back to its run', async () => {
+    const dir = await makeTempDir();
+    const path = await writeCoachReport({
+      reportsDir: dir,
+      generatedAt: new Date('2026-07-07T09:00:00.000Z'),
+      runId: 'run-1234-abcd',
+      markdown: '# Report\n',
+    });
+
+    expect(path).toContain('run-1234-abcd');
+    expect(path.endsWith('-report.md')).toBe(true);
+  });
+
+  it('sanitizes a hostile run id rather than letting it shape the path', async () => {
+    const dir = await makeTempDir();
+    const path = await writeCoachReport({
+      reportsDir: dir,
+      generatedAt: new Date('2026-07-07T09:00:00.000Z'),
+      runId: '../escape/run',
+      markdown: '# Report\n',
+    });
+
+    expect(path.startsWith(dir)).toBe(true);
+    expect(path).not.toContain('escape/');
   });
 });

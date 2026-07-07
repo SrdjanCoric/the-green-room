@@ -5,35 +5,11 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  collectAnswer,
   describeDriveFailure,
   driveInterview,
   loadLastRun,
   saveLastRun,
 } from './interview-session';
-
-describe('collectAnswer', () => {
-  it('joins lines until the /done sentinel and trims the result', async () => {
-    const lines = ['First line.', 'Second line.', '/done', 'ignored after done'];
-    let i = 0;
-    const answer = await collectAnswer(async () => (i < lines.length ? lines[i++] : null));
-
-    expect(answer).toBe('First line.\nSecond line.');
-  });
-
-  it('stops at end of input even without a sentinel', async () => {
-    const lines = ['Only line.'];
-    let i = 0;
-    const answer = await collectAnswer(async () => (i < lines.length ? lines[i++] : null));
-
-    expect(answer).toBe('Only line.');
-  });
-
-  it('returns an empty string when the answer is blank', async () => {
-    const answer = await collectAnswer(async () => '/done');
-    expect(answer).toBe('');
-  });
-});
 
 describe('last-run persistence', () => {
   let dir: string;

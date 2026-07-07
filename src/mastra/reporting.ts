@@ -1,6 +1,7 @@
 import { mkdir, open, readdir, stat } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 
+import { dataDir } from './data-dir';
 import type { CoachReport } from './schemas/coach-report';
 import type { TranscriptEntry } from './schemas/interview';
 
@@ -18,8 +19,10 @@ export interface ReportListing {
   modifiedAt: Date;
 }
 
+/** Reports live beside the database under the project-root `data/` directory, so the
+ *  CLI and `mastra dev` write and list the same reports from any working directory. */
 export function defaultReportsDir(): string {
-  return join(process.cwd(), 'data', 'reports');
+  return join(dataDir, 'reports');
 }
 
 function sanitizeFilenamePart(value: string): string {
@@ -106,11 +109,15 @@ export async function writeCoachReport(params: {
   markdown: string;
   reportsDir?: string;
   generatedAt?: Date;
+  /** The workflow run that produced this report; embedded in the filename so a report traces to its run. */
+  runId?: string;
 }): Promise<string> {
   const reportsDir = params.reportsDir ?? defaultReportsDir();
   const generatedAt = params.generatedAt ?? new Date();
   await mkdir(reportsDir, { recursive: true });
-  const filename = `${sanitizeFilenamePart(generatedAt.toISOString())}-report.md`;
+  const stamp = sanitizeFilenamePart(generatedAt.toISOString());
+  const runPart = params.runId ? `-${sanitizeFilenamePart(params.runId)}` : '';
+  const filename = `${stamp}${runPart}-report.md`;
   const extension = extname(filename);
   const stem = filename.slice(0, -extension.length);
   for (let counter = 1; ; counter += 1) {

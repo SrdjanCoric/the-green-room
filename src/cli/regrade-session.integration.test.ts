@@ -7,7 +7,7 @@ import { Mastra } from '@mastra/core';
 import { Agent } from '@mastra/core/agent';
 import { createWorkflow } from '@mastra/core/workflows';
 import { LibSQLStore } from '@mastra/libsql';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { answerAssessmentSchema } from '../mastra/schemas/answer-assessment';
 import { candidateProfileSchema } from '../mastra/schemas/candidate-profile';
@@ -30,12 +30,12 @@ import {
   interviewLoopDone,
 } from '../mastra/workflows/steps/interview-loop';
 import { coachStep, gradeStep } from '../mastra/workflows/steps/grade-coach';
-import { reportStep } from '../mastra/workflows/steps/report';
+import { createReportStep } from '../mastra/workflows/steps/report';
 import {
   recoachSession,
   regradeSession,
   type InterviewWorkflowHandle,
-} from './interview-session';
+} from '../mastra/session/interview-session';
 
 // Counters that let each test prove which work re-ran on a replay: the interview brain
 // (director/interviewer/assessor) must NOT run again, while the grader and coach must.
@@ -128,6 +128,10 @@ const coach = stubAgent('coach', (async () => {
 
 const interviewTurnStep = createInterviewTurnStep(spyBrainFactory);
 
+// Reports land in one shared temp directory (injected through the report step) instead
+// of the real project-root data/reports; removed after the suite.
+const reportsDir = await mkdtemp(join(tmpdir(), 'regrade-reports-'));
+
 // The real post-interview chain (loop → closing → grade → coach → report) on a real
 // in-memory durable store, seeded past ingest/research so no ingest models are called.
 // It carries the exact production snapshot-persistence policy — imported, not copied —
@@ -146,7 +150,7 @@ const regradeWorkflow = createWorkflow({
   .then(closingStep)
   .then(gradeStep)
   .then(coachStep)
-  .then(reportStep)
+  .then(createReportStep({ reportsDir }))
   .commit();
 
 const mastra = new Mastra({
@@ -208,24 +212,16 @@ async function runToFailure(): Promise<string> {
 }
 
 describe('regradeSession / recoachSession', () => {
-  let cwd: string;
-  let dir: string;
-
-  beforeEach(async () => {
+  beforeEach(() => {
     failMode = 'none';
     brainCalls.decide = 0;
     brainCalls.question = 0;
     brainCalls.assess = 0;
     graderCalls.count = 0;
     coachCalls.count = 0;
-    cwd = process.cwd();
-    dir = await mkdtemp(join(tmpdir(), 'regrade-'));
-    // The report step writes under `<cwd>/data/reports`; isolate it to a temp dir.
-    process.chdir(dir);
   });
-  afterEach(async () => {
-    process.chdir(cwd);
-    await rm(dir, { recursive: true, force: true });
+  afterAll(async () => {
+    await rm(reportsDir, { recursive: true, force: true });
   });
 
   it('regrade re-runs grade+coach+report from the stored transcript with no interview turns', async () => {
