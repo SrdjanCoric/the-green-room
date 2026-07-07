@@ -12,6 +12,7 @@ import { directorDecisionSchema } from '../schemas/director-decision';
 import { roleContextSchema } from '../schemas/role-context';
 import type { BrainFactory } from '../interview/adaptive-brain';
 import { capLimitsSchema } from '../interview/interview-caps';
+import { buildModelRequestContext, getTierModel, resolveModelTiers } from '../model-config';
 import {
   asInterviewSuspend,
   interviewStateSchema,
@@ -77,8 +78,101 @@ const wrapUpWorkflow = createWorkflow({
   .dountil(wrapUpTurnStep, async (context) => interviewLoopDone(context))
   .commit();
 
+// A brain whose director fails on its first consultation and works afterwards: the
+// fresh pass hits the failure, the retried pass succeeds. Mirrors a transient
+// provider fault surviving structuredCall's bounded retries.
+let directorFailuresLeft = 1;
+const failFreshTurnStep = createInterviewTurnStep(() => ({
+  decide: async (state) => {
+    if (directorFailuresLeft > 0) {
+      directorFailuresLeft -= 1;
+      throw new Error('director unavailable (simulated 429)');
+    }
+    return directorDecisionSchema.parse({
+      action: 'new_topic',
+      subject: `topic ${state.coverage.questionCount + 1}`,
+    });
+  },
+  question: async (state) => `Question ${state.coverage.questionCount + 1}`,
+  assess: async () =>
+    answerAssessmentSchema.parse({
+      star: { situation: true, task: true, action: true, result: true, quantifiedResult: false },
+      sufficientSignal: false,
+    }),
+}));
+
+const failFreshWorkflow = createWorkflow({
+  id: 'interviewFailFreshTest',
+  inputSchema: researchOutputSchema,
+  outputSchema: interviewStateSchema,
+})
+  .then(collectLevelStep)
+  .dountil(failFreshTurnStep, async (context) => interviewLoopDone(context))
+  .commit();
+
+// A brain whose assessor fails on its first read and works afterwards: the failure
+// lands on the resume pass, after the candidate has already answered — the payload
+// must carry that answer so the retry replays it instead of re-asking.
+let assessorFailuresLeft = 1;
+const failResumeTurnStep = createInterviewTurnStep(() => ({
+  decide: async (state) =>
+    directorDecisionSchema.parse({
+      action: 'new_topic',
+      subject: `topic ${state.coverage.questionCount + 1}`,
+    }),
+  question: async (state) => `Question ${state.coverage.questionCount + 1}`,
+  assess: async () => {
+    if (assessorFailuresLeft > 0) {
+      assessorFailuresLeft -= 1;
+      throw new Error('assessor unavailable (simulated 429)');
+    }
+    return answerAssessmentSchema.parse({
+      star: { situation: true, task: true, action: true, result: true, quantifiedResult: false },
+      sufficientSignal: false,
+    });
+  },
+}));
+
+const failResumeWorkflow = createWorkflow({
+  id: 'interviewFailResumeTest',
+  inputSchema: researchOutputSchema,
+  outputSchema: interviewStateSchema,
+})
+  .then(collectLevelStep)
+  .dountil(failResumeTurnStep, async (context) => interviewLoopDone(context))
+  .commit();
+
+// A brain factory that records the smart-tier router string it would hand the director
+// each time a turn pass constructs it — the probe for tier inheritance across resumes.
+const seenSmartTiers: string[] = [];
+const tierProbeTurnStep = createInterviewTurnStep((_registry, requestContext) => {
+  seenSmartTiers.push(getTierModel(requestContext, 'smart'));
+  return {
+    decide: async (state) =>
+      directorDecisionSchema.parse({
+        action: 'new_topic',
+        subject: `topic ${state.coverage.questionCount + 1}`,
+      }),
+    question: async (state) => `Question ${state.coverage.questionCount + 1}`,
+    assess: async () =>
+      answerAssessmentSchema.parse({
+        star: { situation: true, task: true, action: true, result: true, quantifiedResult: false },
+        sufficientSignal: false,
+      }),
+  };
+});
+
+const tierProbeWorkflow = createWorkflow({
+  id: 'interviewTierProbeTest',
+  inputSchema: researchOutputSchema,
+  outputSchema: interviewStateSchema,
+})
+  .then(collectLevelStep)
+  .dountil(tierProbeTurnStep, async (context) => interviewLoopDone(context))
+  .commit();
+
 const mastra = new Mastra({
-  workflows: { loopWorkflow, wrapUpWorkflow },
+  workflows: { loopWorkflow, wrapUpWorkflow, failFreshWorkflow, failResumeWorkflow, tierProbeWorkflow },
   storage: new LibSQLStore({ id: 'loop-test', url: ':memory:' }),
 });
 
@@ -201,6 +295,99 @@ describe('interview turn loop', () => {
       kind: 'question',
       questionNumber: 1,
     });
+  });
+});
+
+describe('suspend-on-failure durability', () => {
+  it('suspends with a failure payload when the fresh pass fails, and a retry resume recovers', async () => {
+    const run = await mastra.getWorkflow('failFreshWorkflow').createRun();
+    const failed = await run.start({ inputData: seed({ targetLevel: 'senior' }) });
+
+    // The director fault does not fail the run — it suspends with a failure payload,
+    // so the session is resumable rather than dead.
+    expect(failed.status).toBe('suspended');
+    if (failed.status !== 'suspended') return;
+    const payload = readSuspendPayload(failed.suspendPayload);
+    expect(payload).toMatchObject({ kind: 'failure', stage: 'director' });
+    if (payload?.kind !== 'failure') return;
+    expect(payload.reason).toContain('director');
+    expect(payload.pending).toBeUndefined();
+
+    // Retrying the turn re-runs the fresh pass and asks the first question.
+    const retried = await run.resume({ resumeData: { retry: true } });
+    expect(retried.status).toBe('suspended');
+    if (retried.status !== 'suspended') return;
+    expect(readSuspendPayload(retried.suspendPayload)).toMatchObject({
+      kind: 'question',
+      questionNumber: 1,
+    });
+  });
+
+  it('carries the pending answer through a resume-pass failure so it is never re-asked', async () => {
+    const run = await mastra.getWorkflow('failResumeWorkflow').createRun();
+    let result = await run.start({ inputData: seed({ targetLevel: 'senior' }) });
+    if (result.status !== 'suspended') throw new Error('expected first question');
+    const firstQuestion = questionText(result.suspendPayload);
+
+    // The answer arrives, then the assessor faults: the run must suspend with the
+    // answered turn intact in the payload, not lose it or fail the run.
+    result = await run.resume({ resumeData: { answer: 'My first answer.' } });
+    expect(result.status).toBe('suspended');
+    if (result.status !== 'suspended') return;
+    const payload = readSuspendPayload(result.suspendPayload);
+    expect(payload).toMatchObject({ kind: 'failure', stage: 'assessor' });
+    if (payload?.kind !== 'failure') return;
+    expect(payload.pending).toMatchObject({
+      question: firstQuestion,
+      answer: 'My first answer.',
+    });
+
+    // The retry replays the stored turn — assess only, never re-asking — and the loop
+    // continues to the second question.
+    result = await run.resume({ resumeData: { retry: true } });
+    expect(result.status).toBe('suspended');
+    if (result.status !== 'suspended') return;
+    const secondQuestion = questionText(result.suspendPayload);
+    expect(secondQuestion).not.toBe(firstQuestion);
+
+    // Finishing the interview shows the replayed turn exactly once, with the original
+    // question and the answer that survived the failure.
+    result = await run.resume({ resumeData: { answer: 'My second answer.' } });
+    expect(result.status).toBe('success');
+    if (result.status !== 'success') return;
+    expect(result.result.transcript).toEqual([
+      { question: firstQuestion, answer: 'My first answer.' },
+      { question: secondQuestion, answer: 'My second answer.' },
+    ]);
+    expect(result.result.assessments).toHaveLength(2);
+  });
+});
+
+describe('model-tier inheritance across resume', () => {
+  it('a bare cross-process resume keeps the tiers the run started with', async () => {
+    // Start with deliberately non-default tiers riding the request context.
+    const tiers = resolveModelTiers({
+      provider: 'probe',
+      fastModel: 'fast-model-x',
+      smartModel: 'smart-model-x',
+    });
+    const workflow = mastra.getWorkflow('tierProbeWorkflow');
+    const run = await workflow.createRun();
+    const started = await run.start({
+      inputData: seed({ targetLevel: 'senior' }),
+      requestContext: buildModelRequestContext(tiers),
+    });
+    expect(started.status).toBe('suspended');
+    expect(seenSmartTiers.at(-1)).toBe('probe/smart-model-x');
+
+    // Reattach by runId — a fresh process — and resume with NO model flags: the
+    // engine merges the snapshot's request context into the bare resume, so the
+    // session keeps the models it started with. That consistency is the contract
+    // the `resume` command relies on by exposing no model flags.
+    const reconnected = await workflow.createRun({ runId: run.runId });
+    const resumed = await reconnected.resume({ resumeData: { answer: 'Answer one.' } });
+    expect(resumed.status).toBe('suspended');
+    expect(seenSmartTiers.at(-1)).toBe('probe/smart-model-x');
   });
 });
 

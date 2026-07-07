@@ -102,7 +102,10 @@ export interface DriveInterviewParams {
 /**
  * Drive a suspended interview run to completion: each suspension is either a request
  * for the target level or a question, so answer it via the matching callback and
- * resume, until the run is no longer suspended. Transport-agnostic — the CLI injects
+ * resume, until the run is no longer suspended. A `failure` suspension ends the drive
+ * instead — the run stays suspended (the transcript safe in its snapshot) and the
+ * caller reports it, so the operator retries with the `resume` command rather than
+ * this loop hammering a failing provider. Transport-agnostic — the CLI injects
  * terminal prompts; a test injects scripted answers.
  */
 export async function driveInterview(params: DriveInterviewParams): Promise<DriveResult> {
@@ -111,6 +114,9 @@ export async function driveInterview(params: DriveInterviewParams): Promise<Driv
     const payload = readSuspendPayload(result.suspendPayload);
     if (!payload) {
       throw new Error('The interview suspended without a recognizable prompt.');
+    }
+    if (payload.kind === 'failure') {
+      return result;
     }
     if (payload.kind === 'level') {
       const level = await params.onLevel(payload.prompt);
@@ -231,11 +237,20 @@ export async function reconnectInterview(
   }
 
   const run = await params.workflow.createRun({ runId: params.runId });
-  // Seed the driver with the pending suspension so it prompts before the first resume.
-  const initial: DriveResult = { status: 'suspended', suspendPayload: { pending: payload } };
+  const resume = (resumeData: Record<string, unknown>) =>
+    run.resume({ resumeData, requestContext: params.requestContext });
+
+  // A run that suspended on a failed turn is retried exactly once — this resume *is*
+  // the retry. If the turn fails again the driver stops on the fresh failure payload
+  // rather than hammering a failing provider in a loop.
+  const initial: DriveResult =
+    payload.kind === 'failure'
+      ? await resume({ retry: true })
+      : // Seed the driver with the pending suspension so it prompts before the first resume.
+        { status: 'suspended', suspendPayload: { pending: payload } };
   const result = await driveInterview({
     initial,
-    resume: (resumeData) => run.resume({ resumeData, requestContext: params.requestContext }),
+    resume,
     onLevel: params.onLevel,
     onQuestion: params.onQuestion,
   });
@@ -308,11 +323,23 @@ export function recoachSession(params: ReplaySessionParams): Promise<ReplayOutco
 
 /**
  * Turn a non-successful drive result into a human message, or `null` when the run
- * actually succeeded. The workflow serializes step errors through storage, so a
- * failure arrives as a plain `{ message }` object rather than an `Error` instance.
+ * actually succeeded. A run left suspended on a failed turn renders the failure
+ * payload — what broke and that the transcript is safe — pointing the operator at
+ * the `resume` command, which retries the turn. The workflow serializes step errors
+ * through storage, so a hard failure arrives as a plain `{ message }` object rather
+ * than an `Error` instance.
  */
 export function describeDriveFailure(result: DriveResult): string | null {
   if (result.status === 'success') return null;
+  if (result.status === 'suspended') {
+    const payload = readSuspendPayload(result.suspendPayload);
+    if (payload?.kind === 'failure') {
+      return (
+        `${payload.reason} The interview is paused with your answers saved — ` +
+        'run the resume command to retry this turn.'
+      );
+    }
+  }
   const error = result.error;
   if (error instanceof Error) return error.message;
   if (error && typeof error === 'object' && 'message' in error) {
