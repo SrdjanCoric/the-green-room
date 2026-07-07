@@ -17,8 +17,8 @@ export const DEFAULT_PROVIDER = 'anthropic';
  * prefixed by {@link resolveModelTiers}). Overridable per run via CLI flags.
  */
 export const DEFAULT_MODELS: Record<ModelTier, string> = {
-  fast: 'claude-haiku-4-5',
-  smart: 'claude-sonnet-4-5',
+  fast: 'claude-sonnet-4-6',
+  smart: 'claude-opus-4-8',
 };
 
 /** Request-context keys under which the resolved per-tier router strings are stored. */
