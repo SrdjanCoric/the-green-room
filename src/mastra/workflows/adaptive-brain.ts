@@ -90,8 +90,8 @@ export function renderRoleDetails(context: RoleContext): string {
   const lines: string[] = [];
   if (context.company) lines.push(`Company: ${context.company}`);
   lines.push(`Role: ${context.role}`);
-  if (context.valuesFramework.length > 0) {
-    lines.push(`Values framework: ${context.valuesFramework.join(', ')}`);
+  if (context.framework) {
+    lines.push(`Values framework: ${context.framework}`);
   }
   if (context.competencies.length > 0) {
     const weighted = [...context.competencies]
@@ -108,8 +108,8 @@ export function renderRoleContext(context: RoleContext): string {
   const lines: string[] = [];
   if (context.company) lines.push(`Company: ${context.company}`);
   lines.push(`Role: ${context.role}`);
-  if (context.valuesFramework.length > 0) {
-    lines.push(`Values framework: ${context.valuesFramework.join(', ')}`);
+  if (context.framework) {
+    lines.push(`Values framework: ${context.framework}`);
   }
   return lines.join('\n');
 }
@@ -155,7 +155,7 @@ export function renderAssessments(log: TopicAssessment[]): string {
 
 /**
  * Neutralize any literal fence delimiter embedded in untrusted content before it is
- * wrapped in a `<transcript>`/`<profile>`/`<brief>`/`<grades>` fence. A candidate whose CV or answer
+ * wrapped in a `<cv>`/`<posting>`/`<transcript>`/`<profile>`/`<brief>`/`<grades>` fence. A candidate whose CV or answer
  * contains a forged closing tag (e.g. `</transcript>` followed by injected instructions)
  * could otherwise close the fence early and smuggle text past the "untrusted data" guard
  * the system prompts rely on. The angle brackets become square brackets: still readable to
@@ -165,7 +165,7 @@ export function renderAssessments(log: TopicAssessment[]): string {
  */
 export function neutralizeFences(text: string): string {
   return text.replace(
-    /<(\/?)(transcript|profile|brief|grades)>/gi,
+    /<(\/?)(cv|posting|transcript|profile|brief|grades)>/gi,
     (_match, slash, tag) => `[${slash}${tag}]`,
   );
 }

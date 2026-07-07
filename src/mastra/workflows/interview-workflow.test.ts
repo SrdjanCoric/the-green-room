@@ -203,7 +203,7 @@ describe('createRoleContextBuilder', () => {
   const cannedRole = roleContextSchema.parse({
     company: 'Globex',
     role: 'Staff Engineer',
-    competencies: [{ name: 'Distributed systems', weight: 0.9 }],
+    competencies: [{ name: 'Distributed systems', weight: 5 }],
   });
 
   it('requests structured output against the role-context schema, forwarding the tiering context', async () => {

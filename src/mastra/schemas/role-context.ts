@@ -10,18 +10,19 @@ export const competencySchema = z.object({
     .describe('A competency the role evaluates, e.g. "system design" or "stakeholder management".'),
   weight: z
     .number()
-    .min(0)
-    .max(1)
+    .int()
+    .min(1)
+    .max(5)
     .describe(
-      'Relative importance from 0 (peripheral) to 1 (central); higher competencies are probed more in the interview.',
+      'How heavily the posting emphasizes this competency, an integer from 1 (barely) to 5 (core); higher competencies are probed more in the interview.',
     ),
 });
 
 /**
  * The role the candidate is interviewing for, distilled from a job posting: who is
- * hiring, for what, the competencies to assess (weighted), and any values framework
- * the posting emphasizes. Downstream the director uses the weights to steer the
- * interview and the grader uses them to score.
+ * hiring, for what, the competencies to assess (weighted), and any published values
+ * framework the posting maps onto. Downstream the director uses the weights to steer
+ * the interview and the grader uses them to score.
  */
 export const roleContextSchema = z.object({
   company: z.string().optional().describe('Hiring company name, if the posting identifies it.'),
@@ -35,10 +36,12 @@ export const roleContextSchema = z.object({
     .array(competencySchema)
     .default([])
     .describe('Weighted competencies the interview should assess, most important first.'),
-  valuesFramework: z
-    .array(z.string())
-    .default([])
-    .describe('Company values or leadership principles the posting emphasizes, quoted faithfully.'),
+  framework: z
+    .string()
+    .optional()
+    .describe(
+      'The published values or leadership framework the round maps onto, if the company has one, e.g. "Amazon Leadership Principles". Omitted when there is none.',
+    ),
 });
 
 export type Competency = z.infer<typeof competencySchema>;
@@ -54,9 +57,9 @@ export const DEFAULT_ROLE_CONTEXT: RoleContext = roleContextSchema.parse({
   role: 'General behavioral interview',
   summary: 'No job posting was provided; running a general behavioral interview.',
   competencies: [
-    { name: 'Communication', weight: 0.5 },
-    { name: 'Problem solving', weight: 0.5 },
-    { name: 'Collaboration', weight: 0.5 },
-    { name: 'Ownership', weight: 0.5 },
+    { name: 'Communication', weight: 3 },
+    { name: 'Problem solving', weight: 3 },
+    { name: 'Collaboration', weight: 3 },
+    { name: 'Ownership', weight: 3 },
   ],
 });

@@ -122,14 +122,14 @@ export function formatRoleContext(role: RoleContext): string {
   if (role.summary) lines.push('', role.summary);
 
   if (role.competencies.length > 0) {
-    lines.push('', 'Competencies (weighted):');
+    lines.push('', 'Competencies (weighted 1-5):');
     for (const competency of role.competencies) {
-      lines.push(`  • ${competency.name} (${competency.weight.toFixed(2)})`);
+      lines.push(`  • ${competency.name} (${competency.weight})`);
     }
   }
 
-  if (role.valuesFramework.length > 0) {
-    lines.push('', `Values: ${role.valuesFramework.join(', ')}`);
+  if (role.framework) {
+    lines.push('', `Values: ${role.framework}`);
   }
 
   return lines.join('\n');

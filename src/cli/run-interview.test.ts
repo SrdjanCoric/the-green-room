@@ -64,14 +64,14 @@ describe('formatRoleContext', () => {
       seniority: 'staff',
       summary: 'Owns the platform.',
       competencies: [
-        { name: 'Distributed systems', weight: 0.9 },
-        { name: 'Mentorship', weight: 0.6 },
+        { name: 'Distributed systems', weight: 5 },
+        { name: 'Mentorship', weight: 3 },
       ],
-      valuesFramework: ['Ownership'],
+      framework: 'Ownership',
     });
 
     expect(out).toContain('Staff Engineer @ Globex');
-    expect(out).toContain('Distributed systems (0.90)');
+    expect(out).toContain('Distributed systems (5)');
     expect(out).toContain('Ownership');
   });
 });
