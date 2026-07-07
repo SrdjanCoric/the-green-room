@@ -14,10 +14,23 @@ import {
   type CompanyBrief,
 } from '../schemas/company-brief';
 import {
+  transcriptEntrySchema,
+  type TranscriptEntry,
+} from '../schemas/interview';
+import {
   DEFAULT_ROLE_CONTEXT,
   roleContextSchema,
   type RoleContext,
 } from '../schemas/role-context';
+import {
+  DEFAULT_CAP_LIMITS,
+  INITIAL_COVERAGE,
+  allowQuestion,
+  capLimitsSchema,
+  coverageStateSchema,
+  type CapLimits,
+  type CoverageState,
+} from './interview-caps';
 
 /**
  * The model boundary for CV parsing, injected so it can be mocked in tests: given
@@ -318,6 +331,59 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 }
 
 
+/**
+ * The placeholder question for a turn. The adaptive brain (task 0006) replaces this
+ * with a director-driven, transcript-aware question; here it is a deterministic prompt
+ * so the loop mechanics — suspend, resume, transcript append, caps — can be built and
+ * tested on their own.
+ */
+export function placeholderQuestion(questionNumber: number): string {
+  return `Question ${questionNumber}: tell me about a challenge you faced and how you handled it.`;
+}
+
+/**
+ * A cheap, dependency-free token estimate (~4 characters per token). Good enough to
+ * enforce a coarse token-budget cap without pulling in a tokenizer; the exact model
+ * accounting lives in observability, not here.
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/** The mutable slice of interview state the turn logic reads and advances. */
+export interface InterviewTurnState {
+  transcript: TranscriptEntry[];
+  coverage: CoverageState;
+  limits: CapLimits;
+}
+
+/**
+ * Record one answered question: append it to the transcript and advance the coverage
+ * counters (one more question asked, its question and answer tokens spent). Pure —
+ * returns a new state and mutates nothing — so the loop step and its tests share it.
+ * Placeholder turns in this task are always new questions, so the within-topic
+ * counters reset; the director (task 0006) will drive follow-up/reprompt counting.
+ */
+export function recordTurn(
+  state: InterviewTurnState,
+  entry: TranscriptEntry,
+): InterviewTurnState {
+  const coverage: CoverageState = {
+    ...state.coverage,
+    questionCount: state.coverage.questionCount + 1,
+    tokensUsed:
+      state.coverage.tokensUsed + estimateTokens(entry.question) + estimateTokens(entry.answer),
+    consecutiveFollowUps: 0,
+    repromptCount: 0,
+  };
+  return { ...state, transcript: [...state.transcript, entry], coverage };
+}
+
+/** True once no further question is allowed under the caps — the loop should end. */
+export function interviewComplete(state: InterviewTurnState): boolean {
+  return !allowQuestion(state.coverage, state.limits, 'new').allowed;
+}
+
 const ingestInputSchema = z.object({
   // `cvPath` is a local filesystem path read directly by the ingest step. In the
   // CLI it is the operator's own trusted input. If this workflow is ever exposed
@@ -339,17 +405,96 @@ const ingestInputSchema = z.object({
     .array(z.string())
     .default([])
     .describe('Public URLs the research step may fetch for company context.'),
+  targetLevel: z
+    .string()
+    .optional()
+    .describe('Seniority level to calibrate the interview to; if omitted the loop asks for it.'),
+  limits: capLimitsSchema
+    .optional()
+    .describe('Override the default coverage caps that bound the session.'),
 });
 
 const ingestOutputSchema = z.object({
   profile: candidateProfileSchema,
   roleContext: roleContextSchema,
   researchUrls: z.array(z.string()).default([]),
+  targetLevel: z.string().optional(),
+  limits: capLimitsSchema.optional(),
 });
 
-const researchOutputSchema = ingestOutputSchema.extend({
+export const researchOutputSchema = ingestOutputSchema.extend({
   companyBrief: companyBriefSchema,
 });
+
+/**
+ * The state threaded through the interview loop: the ingest/research output plus a
+ * resolved target level, the running transcript, the coverage counters, the caps
+ * bounding the session, and a `done` flag the loop condition reads to stop.
+ */
+export const interviewStateSchema = researchOutputSchema.extend({
+  targetLevel: z.string().describe('The resolved seniority level the interview targets.'),
+  transcript: z.array(transcriptEntrySchema).default([]),
+  coverage: coverageStateSchema,
+  limits: capLimitsSchema,
+  done: z.boolean().default(false).describe('True once the caps end the interview loop.'),
+});
+
+export type InterviewState = z.infer<typeof interviewStateSchema>;
+
+/** Suspend payload for the target-level prompt: what to ask, tagged for the client. */
+const levelSuspendSchema = z.object({
+  kind: z.literal('level'),
+  prompt: z.string().describe('The question asking the operator for the target level.'),
+});
+
+/** Resume payload answering the target-level prompt. */
+const levelResumeSchema = z.object({
+  level: z.string().describe('The chosen seniority level.'),
+});
+
+/** Suspend payload for an interview turn: the question posed to the candidate. */
+const questionSuspendSchema = z.object({
+  kind: z.literal('question'),
+  question: z.string().describe('The question posed to the candidate this turn.'),
+  questionNumber: z.number().int().positive().describe('1-based index of this question.'),
+});
+
+/** Resume payload for an interview turn: the candidate's answer. */
+const answerResumeSchema = z.object({
+  answer: z.string().describe("The candidate's answer to the suspended question."),
+});
+
+/** The two things an interview run can suspend to ask for: a level, or an answer. */
+export type InterviewSuspend =
+  | z.infer<typeof levelSuspendSchema>
+  | z.infer<typeof questionSuspendSchema>;
+
+/** Narrow an arbitrary suspend payload to the interview union, or `undefined`. */
+export function asInterviewSuspend(payload: unknown): InterviewSuspend | undefined {
+  if (payload && typeof payload === 'object' && 'kind' in payload) {
+    const kind = (payload as { kind: unknown }).kind;
+    if (kind === 'level' || kind === 'question') return payload as InterviewSuspend;
+  }
+  return undefined;
+}
+
+/**
+ * Pull the pending suspend payload out of a suspended run result. `result.suspendPayload`
+ * is a map keyed by the suspended step id; this linear workflow suspends one step at a
+ * time, so there is normally a single entry. Rather than assume that, return the first
+ * value that narrows to the interview union — so an unrelated concurrent suspension (were
+ * one ever added) can't shadow the interview prompt. (The workflow state reader, used on
+ * reconnect, exposes the payload directly instead — pass that through `asInterviewSuspend`.)
+ */
+export function readSuspendPayload(
+  suspendPayload: Record<string, unknown> | undefined,
+): InterviewSuspend | undefined {
+  for (const value of Object.values(suspendPayload ?? {})) {
+    const payload = asInterviewSuspend(value);
+    if (payload) return payload;
+  }
+  return undefined;
+}
 
 /**
  * `ingest`: read the CV into a structured profile (written to the candidate's working
@@ -376,7 +521,13 @@ export const ingestStep = createStep({
       postingText: inputData.postingText,
     });
 
-    return { profile, roleContext, researchUrls: inputData.researchUrls };
+    return {
+      profile,
+      roleContext,
+      researchUrls: inputData.researchUrls,
+      targetLevel: inputData.targetLevel,
+      limits: inputData.limits,
+    };
   },
 });
 
@@ -396,15 +547,101 @@ export const researchStep = createStep({
 });
 
 /**
- * The interview workflow. It starts with `ingest`, then performs best-effort
- * company research before later tasks add the adaptive interview loop, grading, and
- * coaching, on the same run so its snapshot carries the whole session.
+ * `collectLevel`: resolve the target seniority level. If it arrived on the run input
+ * (the `--level` flag) it passes straight through; otherwise the step suspends to ask
+ * for it, and resumes with the operator's answer. Either way it seeds the interview
+ * loop state — an empty transcript, zeroed coverage, and the default caps.
+ */
+export const collectLevelStep = createStep({
+  id: 'collectLevel',
+  inputSchema: researchOutputSchema,
+  outputSchema: interviewStateSchema,
+  suspendSchema: levelSuspendSchema,
+  resumeSchema: levelResumeSchema,
+  execute: async ({ inputData, resumeData, suspend }) => {
+    const provided = inputData.targetLevel?.trim();
+    const resumed = resumeData?.level?.trim();
+    const level = provided && provided.length > 0 ? provided : resumed;
+
+    if (!level) {
+      return await suspend({
+        kind: 'level',
+        prompt: 'What seniority level should this interview target? (e.g. junior, senior, staff)',
+      });
+    }
+
+    return {
+      ...inputData,
+      targetLevel: level,
+      transcript: [],
+      coverage: INITIAL_COVERAGE,
+      limits: inputData.limits ?? DEFAULT_CAP_LIMITS,
+      done: false,
+    };
+  },
+});
+
+/**
+ * `interviewTurn`: one turn of the adaptive loop. On the fresh pass it checks the caps
+ * and, if a question is still allowed, suspends with a (placeholder) question. On the
+ * resume pass it reads that question back from the suspend data — never regenerating —
+ * appends `{question, answer}` to the transcript, advances the coverage counters, and
+ * marks the loop done once the caps are spent. Driven by `.dountil` below.
+ */
+export const interviewTurnStep = createStep({
+  id: 'interviewTurn',
+  inputSchema: interviewStateSchema,
+  outputSchema: interviewStateSchema,
+  suspendSchema: questionSuspendSchema,
+  resumeSchema: answerResumeSchema,
+  execute: async ({ inputData, resumeData, suspend, suspendData }) => {
+    if (!resumeData) {
+      // Fresh pass. If the caps are already spent (e.g. on re-entry), end without
+      // asking; otherwise suspend with this turn's question and wait for the answer.
+      if (interviewComplete(inputData)) {
+        return { ...inputData, done: true };
+      }
+      const questionNumber = inputData.coverage.questionCount + 1;
+      return await suspend({
+        kind: 'question',
+        question: placeholderQuestion(questionNumber),
+        questionNumber,
+      });
+    }
+
+    // Resume pass. Read the question back from the suspend data — never regenerate
+    // it — so the transcript records exactly what was asked. Once questions are
+    // adaptive (task 0006) a regenerated question would differ from the one the
+    // candidate actually answered, so a missing payload is a hard error, not a fallback.
+    if (!suspendData?.question) {
+      throw new Error('Interview turn resumed without its suspended question; cannot record the transcript.');
+    }
+    const next = recordTurn(inputData, { question: suspendData.question, answer: resumeData.answer });
+
+    return { ...inputData, transcript: next.transcript, coverage: next.coverage, done: interviewComplete(next) };
+  },
+});
+
+/** The `.dountil` condition: stop looping once a turn reports the caps are spent. */
+export function interviewLoopDone({ inputData }: { inputData: InterviewState }): boolean {
+  return inputData.done === true;
+}
+
+/**
+ * The interview workflow. It ingests the CV and role, performs best-effort company
+ * research, collects the target level, then runs the adaptive interview loop — each
+ * turn suspending with a question and resuming with the answer — until the caps bound
+ * the session. It runs on a single durable run so the snapshot carries the whole
+ * session, which is what lets the `resume` command reconnect by `runId`. Later tasks
+ * add grading, coaching, and the report on the same run.
  */
 export const interviewWorkflow = createWorkflow({
   id: 'interviewWorkflow',
   inputSchema: ingestInputSchema,
-  outputSchema: researchOutputSchema,
+  outputSchema: interviewStateSchema,
 })
   .then(ingestStep)
   .then(researchStep)
+  .then(collectLevelStep)
+  .dountil(interviewTurnStep, async (context) => interviewLoopDone(context))
   .commit();

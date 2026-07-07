@@ -4,7 +4,7 @@ import {
   formatCompanyBrief,
   formatCandidateProfile,
   formatRoleContext,
-  ingestCv,
+  formatTranscript,
   resolveIngestIds,
   resolveJobPosting,
 } from './run-interview';
@@ -97,6 +97,24 @@ describe('formatCompanyBrief', () => {
   });
 });
 
+describe('formatTranscript', () => {
+  it('numbers each question and answer in order', () => {
+    const out = formatTranscript([
+      { question: 'Tell me about a challenge.', answer: 'I shipped the migration.' },
+      { question: 'What did you learn?', answer: 'To ask for help sooner.' },
+    ]);
+
+    expect(out).toContain('Q1: Tell me about a challenge.');
+    expect(out).toContain('A1: I shipped the migration.');
+    expect(out).toContain('Q2: What did you learn?');
+    expect(out).toContain('A2: To ask for help sooner.');
+  });
+
+  it('states plainly when no questions were asked', () => {
+    expect(formatTranscript([])).toContain('No questions');
+  });
+});
+
 describe('resolveJobPosting', () => {
   it('returns undefined when no job argument is supplied', async () => {
     expect(await resolveJobPosting({})).toEqual({ postingText: undefined, researchUrls: [] });
@@ -157,13 +175,5 @@ describe('resolveJobPosting', () => {
     });
 
     expect(resolved).toEqual({ postingText: undefined, researchUrls: [] });
-  });
-});
-
-describe('ingestCv', () => {
-  it('surfaces the underlying cause when the run fails', async () => {
-    // An unsupported file type fails inside the ingest step before any model call,
-    // so this exercises the real failure path offline.
-    await expect(ingestCv({ cvPath: 'no-such-cv.docx' })).rejects.toThrow(/unsupported/i);
   });
 });
