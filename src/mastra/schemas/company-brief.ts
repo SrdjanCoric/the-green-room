@@ -7,7 +7,7 @@ export const companyBriefSchema = z.object({
     .array(z.string())
     .default([])
     .describe('Concrete public facts or context points the interviewer can use.'),
-  sources: z.array(z.string()).default([]).describe('Public URLs used to build the brief.'),
+  sources: z.array(z.url()).default([]).describe('Public URLs used to build the brief.'),
 });
 
 export type CompanyBrief = z.infer<typeof companyBriefSchema>;

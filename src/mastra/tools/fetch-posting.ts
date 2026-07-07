@@ -1,3 +1,5 @@
+import type { fetch as undiciFetch } from 'undici';
+
 import { extractPosting, type PostingSource } from './posting-extract';
 import { safeFetchText, truncate, type HostLookup } from './safe-fetch';
 import { parseWorkableJob, workableApiUrl } from './workable';
@@ -31,7 +33,7 @@ export interface FetchPostingOptions {
   /** Overall time budget in ms; defaults to the safe-fetch default. */
   timeoutMs?: number;
   /** Injected `fetch`, defaulting to undici's. When set, IP pinning is skipped (the mock controls resolution). */
-  fetchImpl?: typeof fetch;
+  fetchImpl?: typeof undiciFetch;
   /** Injected DNS resolver, defaulting to `dns/promises` lookup. */
   lookup?: HostLookup;
   signal?: AbortSignal;

@@ -1,7 +1,7 @@
 import { isIP, type LookupFunction } from 'node:net';
 import { lookup as dnsLookup } from 'node:dns/promises';
 
-import { Agent, fetch as undiciFetch } from 'undici';
+import { Agent, fetch as undiciFetch, type Response as UndiciResponse } from 'undici';
 
 /**
  * Shared transport plumbing for every outbound fetch in the app: the SSRF guard, the
@@ -37,7 +37,7 @@ export interface SafeFetchOptions {
   /** Overall time budget in ms; defaults to {@link DEFAULT_TIMEOUT_MS}. */
   timeoutMs?: number;
   /** Injected `fetch`, defaulting to undici's. When set, IP pinning is skipped (the mock controls resolution). */
-  fetchImpl?: typeof fetch;
+  fetchImpl?: typeof undiciFetch;
   /** Injected DNS resolver, defaulting to `dns/promises` lookup. */
   lookup?: HostLookup;
   signal?: AbortSignal;
@@ -66,7 +66,7 @@ export interface SafeFetchResult {
 export async function safeFetchText(rawUrl: string, options: SafeFetchOptions): Promise<SafeFetchResult> {
   const lookup = options.lookup ?? defaultLookup;
   const usingRealFetch = options.fetchImpl === undefined;
-  const fetchImpl = options.fetchImpl ?? (undiciFetch as unknown as typeof fetch);
+  const fetchImpl = options.fetchImpl ?? undiciFetch;
 
   // One overall time budget across every redirect hop and the body read, so a slow or
   // hanging upstream can't stall the call indefinitely.
@@ -85,12 +85,13 @@ export async function safeFetchText(rawUrl: string, options: SafeFetchOptions): 
       usingRealFetch && target.pinnedAddress ? pinnedDispatcher(target.pinnedAddress) : undefined;
 
     try {
+      // Undici's own fetch types know the `dispatcher` init option, so pinning needs no cast.
       const response = await fetchImpl(target.url.toString(), {
         redirect: 'manual',
         signal,
         headers: { accept: options.accept },
         ...(dispatcher ? { dispatcher } : {}),
-      } as RequestInit & { dispatcher?: Agent });
+      });
 
       if (isRedirectStatus(response.status)) {
         // Drain the redirect body so the connection is free — an unconsumed body keeps
@@ -143,7 +144,7 @@ export function isRedirectStatus(status: number): boolean {
 
 /** Read a response body as UTF-8 text, enforcing the byte cap while streaming. */
 export async function readBodyCapped(
-  response: Response,
+  response: UndiciResponse,
   maxBytes: number,
   resourceLabel: string,
 ): Promise<string> {
@@ -249,7 +250,7 @@ export async function resolveSafeTarget(rawUrl: string, lookup: HostLookup): Pro
       );
     }
   }
-  return { url, pinnedAddress: addresses[0] };
+  return { url, pinnedAddress: addresses[0] ?? null };
 }
 
 /** True for a publicly-routable IP; false for loopback/private/link-local/reserved. */
@@ -312,8 +313,8 @@ function isGlobalIpv6(ip: string): boolean {
   const embedded = embeddedIpv4(hextets);
   if (embedded !== null) return isGlobalIpv4(intToIpv4(embedded));
 
-  const first = hextets[0];
-  const second = hextets[1];
+  const first = hextets[0] ?? 0;
+  const second = hextets[1] ?? 0;
   if ((first & 0xffc0) === 0xfe80) return false; // link-local fe80::/10
   if ((first & 0xffc0) === 0xfec0) return false; // deprecated site-local fec0::/10
   if ((first & 0xfe00) === 0xfc00) return false; // unique local fc00::/7
@@ -355,12 +356,12 @@ function ipv6Hextets(input: string): number[] | null {
   };
 
   if (halves.length === 1) {
-    const groups = toGroups(halves[0]);
+    const groups = toGroups(halves[0] ?? '');
     return groups && groups.length === 8 ? groups : null;
   }
 
-  const head = toGroups(halves[0]);
-  const tail = toGroups(halves[1]);
+  const head = toGroups(halves[0] ?? '');
+  const tail = toGroups(halves[1] ?? '');
   if (!head || !tail) return null;
   const fill = 8 - head.length - tail.length;
   if (fill < 1) return null; // `::` must stand in for at least one zero group
@@ -374,7 +375,7 @@ function ipv6Hextets(input: string): number[] | null {
  * 6to4, and Teredo. The caller then validates the embedded v4 with {@link isGlobalIpv4}.
  */
 function embeddedIpv4(hextets: number[]): number | null {
-  const [a, b, c, d, e, f, g, h] = hextets;
+  const [a = 0, b = 0, c = 0, d = 0, e = 0, f = 0, g = 0, h = 0] = hextets;
   const low32 = ((g << 16) | h) >>> 0;
   const topFiveZero = a === 0 && b === 0 && c === 0 && d === 0 && e === 0;
   if (topFiveZero && f === 0xffff) return low32; // IPv4-mapped ::ffff:0:0/96

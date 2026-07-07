@@ -6,7 +6,7 @@ describe('collectAnswer', () => {
   it('joins lines until the /done sentinel and trims the result', async () => {
     const lines = ['First line.', 'Second line.', '/done', 'ignored after done'];
     let i = 0;
-    const answer = await collectAnswer(async () => (i < lines.length ? lines[i++] : null));
+    const answer = await collectAnswer(async () => (i < lines.length ? (lines[i++] ?? null) : null));
 
     expect(answer).toBe('First line.\nSecond line.');
   });
@@ -14,7 +14,7 @@ describe('collectAnswer', () => {
   it('stops at end of input even without a sentinel', async () => {
     const lines = ['Only line.'];
     let i = 0;
-    const answer = await collectAnswer(async () => (i < lines.length ? lines[i++] : null));
+    const answer = await collectAnswer(async () => (i < lines.length ? (lines[i++] ?? null) : null));
 
     expect(answer).toBe('Only line.');
   });

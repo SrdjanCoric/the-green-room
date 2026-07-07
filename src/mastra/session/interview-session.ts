@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { createWorkflowStateReader } from '@mastra/core/workflows';
+import { createWorkflowStateReader, type WorkflowRunStatus } from '@mastra/core/workflows';
 import type { RequestContext } from '@mastra/core/request-context';
 import { z } from 'zod';
 
@@ -43,9 +43,12 @@ export async function loadLastRun(path = defaultLastRunPath()): Promise<LastRun 
   }
 }
 
+/** The persisted run state `getWorkflowRunById` returns — exactly what the state reader accepts. */
+export type InterviewRunState = Parameters<typeof createWorkflowStateReader>[0];
+
 /** The slice of a workflow result the interview driver reads. */
 export interface DriveResult {
-  status: string;
+  status: WorkflowRunStatus;
   suspendPayload?: Record<string, unknown>;
   result?: unknown;
   error?: unknown;
@@ -95,7 +98,7 @@ export async function driveInterview(params: DriveInterviewParams): Promise<Driv
 /** The minimal workflow surface the interview runners depend on. */
 export interface InterviewWorkflowHandle {
   createRun(options?: { runId?: string }): Promise<InterviewRunHandle>;
-  getWorkflowRunById(runId: string): Promise<unknown | null>;
+  getWorkflowRunById(runId: string): Promise<InterviewRunState | null>;
 }
 
 export interface InterviewRunHandle {
@@ -182,7 +185,7 @@ export async function reconnectInterview(
   const state = await params.workflow.getWorkflowRunById(params.runId);
   if (!state) return { kind: 'not-found' };
 
-  const reader = createWorkflowStateReader(state as Parameters<typeof createWorkflowStateReader>[0]);
+  const reader = createWorkflowStateReader(state);
   const status = reader.getStatus();
   if (status !== 'suspended') {
     // Already terminal (success/failed/canceled): there is nothing to resume.
@@ -252,7 +255,7 @@ async function replaySession(
   const state = await params.workflow.getWorkflowRunById(params.runId);
   if (!state) return { kind: 'not-found' };
 
-  const reader = createWorkflowStateReader(state as Parameters<typeof createWorkflowStateReader>[0]);
+  const reader = createWorkflowStateReader(state);
   if (reader.getStatus() === 'suspended') {
     // The interview is still mid-session: there is no finished transcript to grade yet.
     return { kind: 'unfinished' };

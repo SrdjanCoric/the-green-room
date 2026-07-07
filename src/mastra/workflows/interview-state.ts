@@ -42,7 +42,7 @@ export const ingestInputSchema = z.object({
     .optional()
     .describe('Resolved job-posting text; omit to run a generic behavioral interview.'),
   researchUrls: z
-    .array(z.string())
+    .array(z.url())
     .default([])
     .describe('Public URLs the research step may fetch for company context.'),
   targetLevel: z
@@ -64,7 +64,7 @@ export const ingestOutputSchema = z.object({
     .enum(['flag', 'cv', 'default'])
     .describe('Where the candidate id came from: explicit override, CV email, or fallback.'),
   threadId: z.string().describe('Id for this interview session, carried for memory writes.'),
-  researchUrls: z.array(z.string()).default([]),
+  researchUrls: z.array(z.url()).default([]),
   targetLevel: z.string().optional(),
   limits: capLimitsSchema.optional(),
 });

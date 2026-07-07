@@ -280,7 +280,7 @@ describe('interview turn loop', () => {
     // The resume pass has no question-regeneration fallback (it throws if the suspend
     // data is missing), so the recorded question can only have come from the suspend
     // payload captured above — this equality genuinely verifies the read-back path.
-    expect(result.result.transcript[0].question).toBe(askedQuestion);
+    expect(result.result.transcript[0]!.question).toBe(askedQuestion);
   });
 
   it('suspends for the target level when it is unset, then proceeds once resumed', async () => {

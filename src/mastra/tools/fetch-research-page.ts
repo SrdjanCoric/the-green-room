@@ -1,4 +1,5 @@
 import { createTool } from '@mastra/core/tools';
+import type { fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 
 import { htmlToText } from './html-to-text';
@@ -33,7 +34,7 @@ export interface FetchResearchPageOptions {
   maxChars?: number;
   maxRedirects?: number;
   timeoutMs?: number;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: typeof undiciFetch;
   lookup?: HostLookup;
   signal?: AbortSignal;
 }
@@ -68,11 +69,11 @@ export const fetchResearchPageTool = createTool({
   description:
     'Fetch a public company research page from an http(s) URL. Refuses localhost and non-global addresses, re-checks redirects, caps page size, and returns readable text.',
   inputSchema: z.object({
-    url: z.string().describe('The public http(s) URL to fetch for company research.'),
+    url: z.url().describe('The public http(s) URL to fetch for company research.'),
   }),
   outputSchema: z.object({
     text: z.string().describe('Readable text extracted from the page.'),
-    url: z.string().describe('The final URL fetched, after any redirects.'),
+    url: z.url().describe('The final URL fetched, after any redirects.'),
   }),
   execute: async (inputData, context) => {
     return fetchResearchPage(inputData.url, { signal: context?.abortSignal });

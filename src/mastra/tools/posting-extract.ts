@@ -27,9 +27,11 @@ const LD_JSON_RE = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*
 
 function extractLdJsonJobPosting(html: string): string | null {
   for (const match of html.matchAll(LD_JSON_RE)) {
+    const block = match[1];
+    if (!block) continue;
     let parsed: unknown;
     try {
-      parsed = JSON.parse(match[1].trim());
+      parsed = JSON.parse(block.trim());
     } catch {
       continue;
     }

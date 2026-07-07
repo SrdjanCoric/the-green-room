@@ -9,6 +9,7 @@ import {
   driveInterview,
   loadLastRun,
   saveLastRun,
+  type DriveResult,
 } from './interview-session';
 
 describe('last-run persistence', () => {
@@ -41,7 +42,7 @@ describe('last-run persistence', () => {
 describe('driveInterview', () => {
   it('answers the level prompt then every question until the run succeeds', async () => {
     // A scripted suspend/resume sequence standing in for the workflow run.
-    const script = [
+    const script: DriveResult[] = [
       { status: 'suspended', suspendPayload: { collectLevel: { kind: 'level', prompt: 'Level?' } } },
       {
         status: 'suspended',
@@ -58,7 +59,7 @@ describe('driveInterview', () => {
       { status: 'success', result: { transcript: [] } },
     ];
     let cursor = 0;
-    const resume = vi.fn(async () => script[++cursor]);
+    const resume = vi.fn(async () => script[++cursor]!);
 
     const onLevel = vi.fn(async () => 'senior');
     const seenQuestions: string[] = [];
@@ -67,7 +68,7 @@ describe('driveInterview', () => {
       return `answer to ${question}`;
     });
 
-    const final = await driveInterview({ initial: script[0], resume, onLevel, onQuestion });
+    const final = await driveInterview({ initial: script[0]!, resume, onLevel, onQuestion });
 
     expect(final.status).toBe('success');
     expect(onLevel).toHaveBeenCalledWith('Level?');

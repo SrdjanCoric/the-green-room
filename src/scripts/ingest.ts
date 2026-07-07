@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { describeError } from '../mastra/errors';
 import { resolveCorpusDir } from '../mastra/knowledge/config';
 import { createRouterEmbedder } from '../mastra/knowledge/embedding';
 import { ingestCorpus } from '../mastra/knowledge/ingest';
@@ -52,6 +53,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error('Ingestion failed:', error instanceof Error ? error.message : error);
+  console.error('Ingestion failed:', describeError(error));
   process.exitCode = 1;
 });

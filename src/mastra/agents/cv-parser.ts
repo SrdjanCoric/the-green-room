@@ -20,6 +20,7 @@ Extract every professional role, notable project, claim that carries a number or
 export const cvParserAgent = new Agent({
   id: 'cvParser',
   name: 'CV Parser',
+  description: 'Extracts a structured candidate profile from raw CV text.',
   instructions: PROFILE_EXTRACTION_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'fast'),
 });

@@ -60,7 +60,8 @@ export function parseWorkableJob(body: string, shortcode: string | null): string
     throw new Error('Workable API did not return JSON.');
   }
   const jobs = extractWorkableJobs(parsed);
-  if (jobs.length === 0) {
+  const firstJob = jobs[0];
+  if (!firstJob) {
     throw new Error('Workable API returned no jobs.');
   }
   // With a shortcode, return that job or fail — never silently substitute a different
@@ -75,7 +76,7 @@ export function parseWorkableJob(body: string, shortcode: string | null): string
     }
     return workableJobToText(match);
   }
-  return workableJobToText(jobs[0]);
+  return workableJobToText(firstJob);
 }
 
 function extractWorkableJobs(parsed: unknown): Record<string, unknown>[] {
