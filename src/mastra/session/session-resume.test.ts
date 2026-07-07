@@ -7,28 +7,28 @@ import { createWorkflow } from '@mastra/core/workflows';
 import { LibSQLStore } from '@mastra/libsql';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { answerAssessmentSchema } from '../mastra/schemas/answer-assessment';
-import { candidateProfileSchema } from '../mastra/schemas/candidate-profile';
-import { EMPTY_COMPANY_BRIEF } from '../mastra/schemas/company-brief';
-import { directorDecisionSchema } from '../mastra/schemas/director-decision';
-import { roleContextSchema } from '../mastra/schemas/role-context';
-import type { BrainFactory } from '../mastra/interview/adaptive-brain';
-import { capLimitsSchema } from '../mastra/interview/interview-caps';
+import { answerAssessmentSchema } from '../schemas/answer-assessment';
+import { candidateProfileSchema } from '../schemas/candidate-profile';
+import { EMPTY_COMPANY_BRIEF } from '../schemas/company-brief';
+import { directorDecisionSchema } from '../schemas/director-decision';
+import { roleContextSchema } from '../schemas/role-context';
+import type { BrainFactory } from '../interview/adaptive-brain';
+import { capLimitsSchema } from '../interview/interview-caps';
 import {
   interviewStateSchema,
   researchOutputSchema,
-} from '../mastra/workflows/interview-state';
+} from '../workflows/interview-state';
 import {
   collectLevelStep,
   createInterviewTurnStep,
   interviewLoopDone,
-} from '../mastra/workflows/steps/interview-loop';
+} from '../workflows/steps/interview-loop';
 import {
   loadLastRun,
   reconnectInterview,
   runInterview,
   type InterviewWorkflowHandle,
-} from '../mastra/session/interview-session';
+} from './interview-session';
 
 // A deterministic brain so the durable CLI path runs without any model calls: each turn
 // opens a fresh topic, and the assessor returns a fixed read.
