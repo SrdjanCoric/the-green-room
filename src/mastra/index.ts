@@ -12,7 +12,6 @@ import { researchAgent } from './agents/research';
 import { roleBuilderAgent } from './agents/role-builder';
 import { storage } from './storage';
 import { interviewWorkflow } from './workflows/interview-workflow';
-import { pingWorkflow } from './workflows/ping-workflow';
 
 /**
  * Native observability. The `MastraStorageExporter` persists AI traces into the
@@ -40,7 +39,7 @@ export const mastra = new Mastra({
     grader: graderAgent,
     coach: coachAgent,
   },
-  workflows: { pingWorkflow, interviewWorkflow },
+  workflows: { interviewWorkflow },
   storage,
   observability,
   logger: new PinoLogger({ name: 'interview-coach', level: 'info' }),
