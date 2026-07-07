@@ -200,6 +200,15 @@ describe('buildDirectorPrompt', () => {
     expect(withoutNudge).toContain('Distributed systems (5)');
   });
 
+  it('frames the question budget from the configured limits, as a ceiling rather than a target', () => {
+    const prompt = buildDirectorPrompt(state());
+
+    // Derived from CapLimits, so the prompt and the config can never drift apart.
+    expect(prompt).toContain('budget of 10 questions');
+    expect(prompt).toContain('a ceiling, never a target');
+    expect(prompt).toContain('wrap up as soon as the signal is sufficient');
+  });
+
   it('feeds the full cap state each turn, including the reprompt count and cap', () => {
     const prompt = buildDirectorPrompt(
       state({ coverage: coverageStateSchema.parse({ questionCount: 4, repromptCount: 1 }) }),

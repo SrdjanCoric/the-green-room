@@ -7,6 +7,7 @@ import {
   allowQuestion,
   capLimitsSchema,
   coverageStateSchema,
+  limitsWithMaxQuestions,
   followUpCapReached,
   questionCapReached,
   repromptCapReached,
@@ -79,6 +80,22 @@ describe('allowQuestion', () => {
   it('ships defaults that bound a session', () => {
     expect(DEFAULT_CAP_LIMITS.maxQuestions).toBeGreaterThan(0);
     expect(DEFAULT_CAP_LIMITS.tokenBudget).toBeGreaterThan(0);
+  });
+});
+
+describe('limitsWithMaxQuestions', () => {
+  it('returns undefined when no override is given, so the workflow keeps its defaults', () => {
+    expect(limitsWithMaxQuestions(undefined)).toBeUndefined();
+  });
+
+  it('raises only the question cap, keeping every other default limit', () => {
+    expect(limitsWithMaxQuestions(12)).toEqual({ ...DEFAULT_CAP_LIMITS, maxQuestions: 12 });
+  });
+
+  it('rejects a cap that is not a positive integer', () => {
+    expect(() => limitsWithMaxQuestions(0)).toThrow();
+    expect(() => limitsWithMaxQuestions(-3)).toThrow();
+    expect(() => limitsWithMaxQuestions(2.5)).toThrow();
   });
 });
 
