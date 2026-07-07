@@ -26,6 +26,11 @@ import {
   resolveJobPosting,
 } from './run-interview';
 
+// The CLI operator supplies their own trusted CV path, so opt this process out of the
+// upload-directory confinement the interview workflow applies to client-supplied paths
+// over the Mastra server. `mastra dev` never sets this, so browser runs stay confined.
+process.env.INTERVIEW_COACH_TRUST_LOCAL_CV ??= '1';
+
 const program = new Command();
 
 /** The interview workflow, typed for the session runners. */
