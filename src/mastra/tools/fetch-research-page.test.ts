@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { UnsafePostingUrlError } from './fetch-posting';
 import { fetchResearchPage, type FetchResearchPageOptions } from './fetch-research-page';
+import { UnsafePostingUrlError } from './safe-fetch';
 
 const globalLookup = async () => ['93.184.216.34'];
 

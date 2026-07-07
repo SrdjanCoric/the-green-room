@@ -1,13 +1,14 @@
 import { readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 
+import { TEXT_FILE_EXTENSIONS } from './extract-cv';
 import {
   MAX_POSTING_CHARS,
   capPostingText,
   fetchPostingText,
-  htmlToText,
   type FetchPostingOptions,
 } from './fetch-posting';
+import { htmlToText } from './html-to-text';
 
 /** How a raw `--job` argument was interpreted. */
 export type PostingKind = 'url' | 'file' | 'text';
@@ -21,8 +22,6 @@ export interface ResolvedPosting {
   url?: string;
 }
 
-/** File extensions read directly as UTF-8 text. */
-const TEXT_EXTENSIONS = new Set(['.txt', '.md', '.markdown', '.text', '']);
 const HTML_EXTENSIONS = new Set(['.html', '.htm']);
 
 /** Upper bound on a posting file's size, checked before it is read. */
@@ -128,8 +127,9 @@ export async function extractPostingFile(filePath: string): Promise<string> {
 
   const raw = (await readFile(filePath, 'utf8')).trim();
   if (HTML_EXTENSIONS.has(extension)) return htmlToText(raw);
-  if (TEXT_EXTENSIONS.has(extension)) return raw;
-  // An existing file of unknown type: read it as text best-effort rather than refuse.
+  // Extensionless files count as text here (unlike the CV extractor, which insists on
+  // a known extension), and an existing file of unknown type is read best-effort too.
+  if (extension === '' || TEXT_FILE_EXTENSIONS.has(extension)) return raw;
   return raw;
 }
 
