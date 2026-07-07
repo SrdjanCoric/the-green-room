@@ -10,7 +10,7 @@
  */
 export function neutralizeFences(text: string): string {
   return text.replace(
-    /<(\/?)(cv|posting|transcript|profile|brief|grades)>/gi,
+    /<(\/?)(cv|posting|transcript|profile|brief|grades|prior_sessions)>/gi,
     (_match, slash, tag) => `[${slash}${tag}]`,
   );
 }

@@ -120,7 +120,7 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
         cvPath: prepared.cvPath,
         postingText: prepared.postingText,
         researchUrls: prepared.researchUrls,
-        resourceId: candidateId(store),
+        candidate: candidateId(store),
         threadId: crypto.randomUUID(),
         ensemble: payload.ensemble,
       };

@@ -1,20 +1,25 @@
 import { Memory } from '@mastra/memory';
 
-import { candidateProfileSchema } from './schemas/candidate-profile';
+import { candidateWorkingMemorySchema } from './interview/coaching-ledger';
 import { storage } from './storage';
 
 /**
- * The interview's memory. Working memory is the {@link candidateProfileSchema}
- * shape, scoped to the resource (the candidate) so a profile persists across
+ * The interview's memory. Working memory is the {@link candidateWorkingMemorySchema}
+ * shape — the parsed candidate profile plus a capped, code-computed ledger of past
+ * coached sessions — scoped to the resource (the candidate) so both persist across
  * threads for the same person; the thread is one interview session.
  *
- * - `scope: 'resource'` keys the profile on the candidate, not the session.
- * - `agentManaged: false` because the ingest step writes the profile
- *   deterministically from the parser's structured output rather than letting the
- *   model update working memory through tool calls.
- * - No semantic recall and no observational memory: a single short session needs
- *   neither, and grading later requires verbatim answers, so nothing here is
- *   summarised away. Conversation history is bounded to the recent turns.
+ * - `scope: 'resource'` keys the record on the candidate, not the session.
+ * - `agentManaged: false` because the ingest step writes the profile and the coach
+ *   step writes the ledger deterministically from validated structured outputs,
+ *   rather than letting a model update working memory through tool calls. Growth is
+ *   bounded by construction: fixed-shape entries, capped at ten, upserted by run id.
+ * - No semantic recall and no observational memory: nothing here records
+ *   conversation messages for an observer to extract from (single-shot generates,
+ *   structured outputs), and grading requires verbatim answers. Observational
+ *   memory is evaluated-and-deferred — the revisit trigger is a future
+ *   conversational coach-chat surface, whose message threads would be exactly what
+ *   it is built for.
  */
 export const candidateMemory = new Memory({
   storage,
@@ -22,7 +27,7 @@ export const candidateMemory = new Memory({
     workingMemory: {
       enabled: true,
       scope: 'resource',
-      schema: candidateProfileSchema,
+      schema: candidateWorkingMemorySchema,
       agentManaged: false,
     },
     semanticRecall: false,

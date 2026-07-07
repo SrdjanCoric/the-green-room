@@ -171,6 +171,9 @@ const smallCaps = capLimitsSchema.parse({
 const seed = {
   profile: candidateProfileSchema.parse({ name: 'Ada Lovelace' }),
   roleContext: roleContextSchema.parse({ role: 'Staff Engineer' }),
+  candidateId: 'candidate-regrade-test',
+  candidateIdOrigin: 'default' as const,
+  threadId: 'thread-regrade-test',
   researchUrls: [],
   companyBrief: EMPTY_COMPANY_BRIEF,
   limits: smallCaps,

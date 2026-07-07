@@ -84,7 +84,7 @@ export function createMastraInterviewClient(
 function buildInputData(input: StartInterviewInput): Record<string, unknown> {
   const data: Record<string, unknown> = {
     cvPath: input.cvPath,
-    resourceId: input.resourceId,
+    candidate: input.candidate,
     threadId: input.threadId,
     researchUrls: input.researchUrls,
   };

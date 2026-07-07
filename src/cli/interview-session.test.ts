@@ -47,10 +47,10 @@ describe('last-run persistence', () => {
 
   it('round-trips the latest run pointer through a file', async () => {
     const path = join(dir, 'nested', 'last-run.json');
-    await saveLastRun({ runId: 'run-123', resourceId: 'cand-1', threadId: 'sess-1' }, path);
+    await saveLastRun({ runId: 'run-123', threadId: 'sess-1' }, path);
 
     const loaded = await loadLastRun(path);
-    expect(loaded).toEqual({ runId: 'run-123', resourceId: 'cand-1', threadId: 'sess-1' });
+    expect(loaded).toEqual({ runId: 'run-123', threadId: 'sess-1' });
 
     // The file is real JSON on disk, not an in-memory shim.
     const raw = JSON.parse(await readFile(path, 'utf8'));

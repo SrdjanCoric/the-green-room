@@ -25,7 +25,13 @@ export const ingestInputSchema = z.object({
   // is attacker-controlled, so the ingest step confines it to the upload directory
   // unless a trusted process (the CLI) opts out.
   cvPath: z.string().describe('Path to the candidate CV file (.pdf, .txt, or .md).'),
-  resourceId: z.string().describe('Stable id for the candidate; keys resource-scoped memory.'),
+  candidate: z
+    .string()
+    .optional()
+    .describe(
+      'Explicit candidate id override. When omitted, identity falls back to the first ' +
+        "email address in the CV text, then to the literal 'default'.",
+    ),
   threadId: z.string().describe('Id for this interview session.'),
   // Already-resolved posting text (from a URL, file, or paste). Resolution — and the
   // interactive paste fallback on a fetch failure — happens client-side before the
@@ -51,6 +57,13 @@ export const ingestInputSchema = z.object({
 export const ingestOutputSchema = z.object({
   profile: candidateProfileSchema,
   roleContext: roleContextSchema,
+  candidateId: z
+    .string()
+    .describe('The resolved candidate identity; keys resource-scoped working memory.'),
+  candidateIdOrigin: z
+    .enum(['flag', 'cv', 'default'])
+    .describe('Where the candidate id came from: explicit override, CV email, or fallback.'),
+  threadId: z.string().describe('Id for this interview session, carried for memory writes.'),
   researchUrls: z.array(z.string()).default([]),
   targetLevel: z.string().optional(),
   limits: capLimitsSchema.optional(),

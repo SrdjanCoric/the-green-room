@@ -194,6 +194,9 @@ function seed(overrides: { targetLevel?: string } = {}) {
   return {
     profile: candidateProfileSchema.parse({ name: 'Ada Lovelace' }),
     roleContext: roleContextSchema.parse({ role: 'Staff Engineer' }),
+    candidateId: 'candidate-loop-test',
+    candidateIdOrigin: 'default' as const,
+    threadId: 'thread-loop-test',
     researchUrls: [],
     companyBrief: EMPTY_COMPANY_BRIEF,
     limits: smallCaps,

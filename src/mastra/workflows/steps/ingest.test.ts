@@ -10,6 +10,7 @@ import {
   createAgentExtractor,
   createRoleContextBuilder,
   persistCandidateProfile,
+  resolveCandidateIdentity,
 } from './ingest';
 
 const cannedProfile = {
@@ -36,10 +37,16 @@ describe('persistCandidateProfile', () => {
     expect(profile.technologies).toEqual(['Rust']);
     expect(profile.roles).toEqual([]);
 
+    // Working memory now holds the full ledger shape: the profile plus the
+    // (initially empty) session ledger.
     const stored = await candidateMemory.getWorkingMemory({ resourceId, threadId });
     expect(stored).not.toBeNull();
-    const reloaded = candidateProfileSchema.parse(JSON.parse(stored as string));
-    expect(reloaded).toMatchObject({ name: 'Ada Lovelace', technologies: ['Rust'] });
+    const reloaded = JSON.parse(stored as string);
+    expect(candidateProfileSchema.parse(reloaded.profile)).toMatchObject({
+      name: 'Ada Lovelace',
+      technologies: ['Rust'],
+    });
+    expect(reloaded.sessions).toEqual([]);
   });
 
   it('keeps profiles isolated per resourceId', async () => {
@@ -55,7 +62,7 @@ describe('persistCandidateProfile', () => {
       resourceId: 'candidate-grace',
       threadId: 'session-2',
     });
-    expect(JSON.parse(own as string).name).toBe('Grace Hopper');
+    expect(JSON.parse(own as string).profile.name).toBe('Grace Hopper');
 
     // A different, never-written candidate must not see Grace's profile.
     const unrelated = await candidateMemory.getWorkingMemory({
@@ -79,7 +86,7 @@ describe('persistCandidateProfile', () => {
       resourceId: 'candidate-alan',
       threadId: 'session-second',
     });
-    expect(JSON.parse(fromAnotherThread as string).name).toBe('Alan Turing');
+    expect(JSON.parse(fromAnotherThread as string).profile.name).toBe('Alan Turing');
   });
 
   it('rejects a malformed extraction that violates the profile schema', async () => {
@@ -116,6 +123,86 @@ describe('persistCandidateProfile', () => {
         threadId: 'session-blank',
       }),
     ).rejects.toThrow(/no.*profile/i);
+  });
+});
+
+describe('persistCandidateProfile ledger preservation', () => {
+  it('keeps the existing session ledger when a new session re-ingests the profile', async () => {
+    const resourceId = 'candidate-returning';
+    const session = {
+      runId: 'run-old',
+      date: '2026-07-01T00:00:00.000Z',
+      role: 'Engineer',
+      questionCount: 2,
+      averageScore: 3,
+      topGaps: ['gap'],
+      drillFoci: ['focus'],
+    };
+
+    await persistCandidateProfile({
+      extractor: async () => ({ name: 'First Pass' }),
+      cvText: 'x',
+      memory: candidateMemory,
+      resourceId,
+      threadId: 'session-a',
+    });
+    // Simulate a coached session having written a ledger entry.
+    await candidateMemory.updateWorkingMemory({
+      resourceId,
+      threadId: 'session-a',
+      workingMemory: JSON.stringify({
+        profile: candidateProfileSchema.parse({ name: 'First Pass' }),
+        sessions: [session],
+      }),
+    });
+
+    // A later interview re-ingests the (possibly updated) CV: the profile refreshes,
+    // the ledger survives.
+    await persistCandidateProfile({
+      extractor: async () => ({ name: 'Second Pass' }),
+      cvText: 'x',
+      memory: candidateMemory,
+      resourceId,
+      threadId: 'session-b',
+    });
+
+    const stored = await candidateMemory.getWorkingMemory({
+      resourceId,
+      threadId: 'session-b',
+    });
+    const reloaded = JSON.parse(stored as string);
+    expect(reloaded.profile.name).toBe('Second Pass');
+    expect(reloaded.sessions).toEqual([session]);
+  });
+});
+
+describe('resolveCandidateIdentity', () => {
+  it('prefers the explicit override over everything', () => {
+    expect(
+      resolveCandidateIdentity({ override: '  jane-custom ', cvText: 'contact: jane@example.com' }),
+    ).toEqual({ candidateId: 'jane-custom', candidateIdOrigin: 'flag' });
+  });
+
+  it('falls back to the first email in the CV, trimmed and lowercased', () => {
+    expect(
+      resolveCandidateIdentity({
+        cvText: 'Jane Doe\nContact: Jane.Doe+CV@Example.COM or jd@other.org',
+      }),
+    ).toEqual({ candidateId: 'jane.doe+cv@example.com', candidateIdOrigin: 'cv' });
+  });
+
+  it("falls back to 'default' when there is no override and no email", () => {
+    expect(resolveCandidateIdentity({ cvText: 'no contact details here' })).toEqual({
+      candidateId: 'default',
+      candidateIdOrigin: 'default',
+    });
+  });
+
+  it('treats a blank override as absent', () => {
+    expect(resolveCandidateIdentity({ override: '   ', cvText: 'a@b.co' })).toEqual({
+      candidateId: 'a@b.co',
+      candidateIdOrigin: 'cv',
+    });
   });
 });
 

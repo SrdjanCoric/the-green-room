@@ -48,7 +48,6 @@ export async function readMultilineAnswer(
 /** A pointer to the most recent interview run, so `resume` can reconnect to it. */
 export interface LastRun {
   runId: string;
-  resourceId: string;
   threadId: string;
 }
 
@@ -151,7 +150,6 @@ export interface RunInterviewParams {
   workflow: InterviewWorkflowHandle;
   inputData: unknown;
   requestContext?: RequestContext;
-  resourceId: string;
   threadId: string;
   onLevel: (prompt: string) => Promise<string>;
   onQuestion: (question: string, questionNumber: number) => Promise<string>;
@@ -170,10 +168,7 @@ export async function runInterview(
   params: RunInterviewParams,
 ): Promise<{ runId: string; result: DriveResult }> {
   const run = await params.workflow.createRun();
-  await saveLastRun(
-    { runId: run.runId, resourceId: params.resourceId, threadId: params.threadId },
-    params.lastRunPath,
-  );
+  await saveLastRun({ runId: run.runId, threadId: params.threadId }, params.lastRunPath);
 
   const started = await run.start({
     inputData: params.inputData,

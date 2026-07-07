@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
+
 import * as p from '@clack/prompts';
 import { Command } from 'commander';
 
@@ -22,7 +24,6 @@ import {
   formatCompanyBrief,
   formatRoleContext,
   formatTranscript,
-  resolveIngestIds,
   resolveJobPosting,
 } from './run-interview';
 
@@ -64,8 +65,18 @@ function terminalPrompts(): {
 }
 
 /** Print the closing summary of a finished interview: role, company, and transcript. */
+const CANDIDATE_ORIGIN_LABELS: Record<string, string> = {
+  flag: 'from --candidate',
+  cv: 'from CV',
+  default: 'fallback',
+};
+
 function reportInterview(rawState: unknown): void {
   const state = reportedInterviewStateSchema.parse(rawState);
+  p.note(
+    `${state.candidateId} (${CANDIDATE_ORIGIN_LABELS[state.candidateIdOrigin] ?? state.candidateIdOrigin})`,
+    'Candidate',
+  );
   p.note(state.closingMessage, 'Closing');
   p.note(state.reportPath, 'Report');
   p.note(formatRoleContext(state.roleContext), 'Role context');
@@ -88,7 +99,10 @@ program
   .option('--provider <name>', 'model provider for both tiers (default: anthropic)')
   .option('--fast-model <id>', 'model id for the fast tier (CV/role parsers, interviewer)')
   .option('--smart-model <id>', 'model id for the smart tier (director, grader, coach)')
-  .option('--candidate <id>', 'stable candidate id; keys resource-scoped memory')
+  .option(
+    '--candidate <id>',
+    'stable candidate id; defaults to the first email in the CV, then "default"',
+  )
   .action(
     async (options: {
       cv: string;
@@ -128,7 +142,7 @@ program
       }
 
       const requestContext = buildModelRequestContext(resolveModelTiers(options));
-      const { resourceId, threadId } = resolveIngestIds({ resourceId: options.candidate });
+      const threadId = randomUUID();
 
       const spinner = p.spinner();
       let preparing = false;
@@ -145,14 +159,13 @@ program
           workflow: interviewWorkflow(),
           inputData: {
             cvPath: options.cv,
-            resourceId,
+            candidate: options.candidate,
             threadId,
             postingText,
             researchUrls,
             targetLevel: options.level,
           },
           requestContext,
-          resourceId,
           threadId,
           // Stop the spinner the moment preparation is done and the first prompt is
           // about to appear, so it doesn't animate over the interactive questions.

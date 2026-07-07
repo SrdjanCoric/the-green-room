@@ -78,6 +78,9 @@ const smallCaps = capLimitsSchema.parse({
 const seed = {
   profile: candidateProfileSchema.parse({ name: 'Ada Lovelace' }),
   roleContext: roleContextSchema.parse({ role: 'Staff Engineer' }),
+  candidateId: 'candidate-session-test',
+  candidateIdOrigin: 'default' as const,
+  threadId: 'thread-session-test',
   researchUrls: [],
   companyBrief: EMPTY_COMPANY_BRIEF,
   limits: smallCaps,
@@ -99,7 +102,6 @@ describe('runInterview', () => {
     const { runId, result } = await runInterview({
       workflow: handle(),
       inputData: seed,
-      resourceId: 'cand-1',
       threadId: 'sess-1',
       onLevel: async () => 'senior',
       onQuestion: async () => `answer ${(questionNo += 1)}`,
@@ -112,11 +114,7 @@ describe('runInterview', () => {
     expect(state.targetLevel).toBe('senior');
 
     // The pointer is on disk so `resume` could reconnect to this run.
-    expect(await loadLastRun(lastRunPath)).toEqual({
-      runId,
-      resourceId: 'cand-1',
-      threadId: 'sess-1',
-    });
+    expect(await loadLastRun(lastRunPath)).toEqual({ runId, threadId: 'sess-1' });
   });
 });
 

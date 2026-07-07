@@ -1,6 +1,5 @@
 import { Agent } from '@mastra/core/agent';
 
-import { candidateMemory } from '../memory';
 import { getTierModel } from '../model-config';
 
 /**
@@ -23,5 +22,4 @@ export const cvParserAgent = new Agent({
   name: 'CV Parser',
   instructions: PROFILE_EXTRACTION_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'fast'),
-  memory: candidateMemory,
 });
