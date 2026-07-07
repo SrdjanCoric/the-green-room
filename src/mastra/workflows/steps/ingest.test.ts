@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { RequestContext } from '@mastra/core/request-context';
 
+import { candidateWorkingMemorySchema } from '../../interview/coaching-ledger';
 import { candidateMemory } from '../../memory';
 import { candidateProfileSchema } from '../../schemas/candidate-profile';
 import { DEFAULT_ROLE_CONTEXT, roleContextSchema } from '../../schemas/role-context';
@@ -41,8 +42,8 @@ describe('persistCandidateProfile', () => {
     // (initially empty) session ledger.
     const stored = await candidateMemory.getWorkingMemory({ resourceId, threadId });
     expect(stored).not.toBeNull();
-    const reloaded = JSON.parse(stored as string);
-    expect(candidateProfileSchema.parse(reloaded.profile)).toMatchObject({
+    const reloaded = candidateWorkingMemorySchema.parse(JSON.parse(stored!));
+    expect(reloaded.profile).toMatchObject({
       name: 'Ada Lovelace',
       technologies: ['Rust'],
     });
@@ -62,7 +63,7 @@ describe('persistCandidateProfile', () => {
       resourceId: 'candidate-grace',
       threadId: 'session-2',
     });
-    expect(JSON.parse(own as string).profile.name).toBe('Grace Hopper');
+    expect(candidateWorkingMemorySchema.parse(JSON.parse(own!)).profile.name).toBe('Grace Hopper');
 
     // A different, never-written candidate must not see Grace's profile.
     const unrelated = await candidateMemory.getWorkingMemory({
@@ -86,7 +87,9 @@ describe('persistCandidateProfile', () => {
       resourceId: 'candidate-alan',
       threadId: 'session-second',
     });
-    expect(JSON.parse(fromAnotherThread as string).profile.name).toBe('Alan Turing');
+    expect(candidateWorkingMemorySchema.parse(JSON.parse(fromAnotherThread!)).profile.name).toBe(
+      'Alan Turing',
+    );
   });
 
   it('rejects a malformed extraction that violates the profile schema', async () => {
@@ -170,7 +173,7 @@ describe('persistCandidateProfile ledger preservation', () => {
       resourceId,
       threadId: 'session-b',
     });
-    const reloaded = JSON.parse(stored as string);
+    const reloaded = candidateWorkingMemorySchema.parse(JSON.parse(stored!));
     expect(reloaded.profile.name).toBe('Second Pass');
     expect(reloaded.sessions).toEqual([session]);
   });

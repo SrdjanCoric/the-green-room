@@ -96,7 +96,7 @@ function jobPostingToText(posting: Record<string, unknown>): string {
 }
 
 function jobLocationText(location: unknown): string | undefined {
-  const place = Array.isArray(location) ? location[0] : location;
+  const place: unknown = Array.isArray(location) ? location[0] : location;
   if (!isRecord(place)) return undefined;
   const address = place.address;
   if (typeof address === 'string') return address;

@@ -214,23 +214,24 @@ export function createInterviewTurnStep(makeBrain: BrainFactory) {
 export const interviewTurnStep = createInterviewTurnStep(agentBrainFactory);
 
 /** The `.dountil` condition: stop looping once a turn reports the caps are spent. */
-export async function interviewLoopDone({
+export function interviewLoopDone({
   inputData,
 }: {
   inputData: InterviewState;
 }): Promise<boolean> {
-  return inputData.done === true;
+  return Promise.resolve(inputData.done === true);
 }
 
 export const closingStep = createStep({
   id: 'closing',
   inputSchema: interviewStateSchema,
   outputSchema: closedInterviewStateSchema,
-  execute: async ({ inputData }) => ({
-    ...inputData,
-    closingMessage:
-      inputData.transcript.length > 0
-        ? 'That covers what I wanted to ask. Thanks for walking me through it today.'
-        : 'That covers what I wanted to ask today. Thanks for your time.',
-  }),
+  execute: ({ inputData }) =>
+    Promise.resolve({
+      ...inputData,
+      closingMessage:
+        inputData.transcript.length > 0
+          ? 'That covers what I wanted to ask. Thanks for walking me through it today.'
+          : 'That covers what I wanted to ask today. Thanks for your time.',
+    }),
 });

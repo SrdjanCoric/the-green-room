@@ -30,7 +30,7 @@ describe('last-run persistence', () => {
     expect(loaded).toEqual({ runId: 'run-123', threadId: 'sess-1' });
 
     // The file is real JSON on disk, not an in-memory shim.
-    const raw = JSON.parse(await readFile(path, 'utf8'));
+    const raw = JSON.parse(await readFile(path, 'utf8')) as { runId: string };
     expect(raw.runId).toBe('run-123');
   });
 

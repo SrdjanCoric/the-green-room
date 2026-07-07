@@ -15,7 +15,7 @@ const forbiddenFetch: typeof undiciFetch = () => {
 /** Build a fetch that returns a canned Response for each URL it sees, in order per URL. */
 function fetchReturning(handler: (url: string) => Response): typeof undiciFetch {
   return (async (input: string | URL | Request) => {
-    const url = typeof input === 'string' ? input : input.toString();
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     return handler(url);
   }) as unknown as typeof undiciFetch;
 }

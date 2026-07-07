@@ -228,10 +228,9 @@ export function asInterviewSuspend(payload: unknown): InterviewSuspend | undefin
  * one ever added) can't shadow the interview prompt. (The workflow state reader, used on
  * reconnect, exposes the payload directly instead — pass that through `asInterviewSuspend`.)
  */
-export function readSuspendPayload(
-  suspendPayload: Record<string, unknown> | undefined,
-): InterviewSuspend | undefined {
-  for (const value of Object.values(suspendPayload ?? {})) {
+export function readSuspendPayload(suspendPayload: unknown): InterviewSuspend | undefined {
+  if (suspendPayload === null || typeof suspendPayload !== 'object') return undefined;
+  for (const value of Object.values(suspendPayload)) {
     const payload = asInterviewSuspend(value);
     if (payload) return payload;
   }

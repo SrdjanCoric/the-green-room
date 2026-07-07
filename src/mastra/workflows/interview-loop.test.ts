@@ -184,7 +184,7 @@ const smallCaps = capLimitsSchema.parse({
 });
 
 /** The question text of a suspended turn, or throw if it isn't a question suspension. */
-function questionText(suspendPayload: Record<string, unknown> | undefined): string {
+function questionText(suspendPayload: unknown): string {
   const payload = readSuspendPayload(suspendPayload);
   if (payload?.kind !== 'question') throw new Error('expected a question suspension');
   return payload.question;
