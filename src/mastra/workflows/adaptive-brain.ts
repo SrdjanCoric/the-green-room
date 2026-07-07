@@ -155,7 +155,7 @@ export function renderAssessments(log: TopicAssessment[]): string {
 
 /**
  * Neutralize any literal fence delimiter embedded in untrusted content before it is
- * wrapped in a `<transcript>`/`<profile>`/`<brief>` fence. A candidate whose CV or answer
+ * wrapped in a `<transcript>`/`<profile>`/`<brief>`/`<grades>` fence. A candidate whose CV or answer
  * contains a forged closing tag (e.g. `</transcript>` followed by injected instructions)
  * could otherwise close the fence early and smuggle text past the "untrusted data" guard
  * the system prompts rely on. The angle brackets become square brackets: still readable to
@@ -164,7 +164,10 @@ export function renderAssessments(log: TopicAssessment[]): string {
  * interviewer's directive alongside the same fenced blocks.
  */
 export function neutralizeFences(text: string): string {
-  return text.replace(/<(\/?)(transcript|profile|brief)>/gi, (_match, slash, tag) => `[${slash}${tag}]`);
+  return text.replace(
+    /<(\/?)(transcript|profile|brief|grades)>/gi,
+    (_match, slash, tag) => `[${slash}${tag}]`,
+  );
 }
 
 const FOLLOW_UP_DIRECTIVE = (decision: DirectorDecision): string =>

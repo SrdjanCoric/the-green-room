@@ -3,8 +3,10 @@ import { PinoLogger } from '@mastra/loggers';
 import { MastraStorageExporter, Observability } from '@mastra/observability';
 
 import { assessorAgent } from './agents/assessor';
+import { coachAgent } from './agents/coach';
 import { cvParserAgent } from './agents/cv-parser';
 import { directorAgent } from './agents/director';
+import { graderAgent } from './agents/grader';
 import { interviewerAgent } from './agents/interviewer';
 import { researchAgent } from './agents/research';
 import { roleBuilderAgent } from './agents/role-builder';
@@ -35,6 +37,8 @@ export const mastra = new Mastra({
     director: directorAgent,
     interviewer: interviewerAgent,
     assessor: assessorAgent,
+    grader: graderAgent,
+    coach: coachAgent,
   },
   workflows: { pingWorkflow, interviewWorkflow },
   storage,
