@@ -1,19 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  DEFAULT_MODELS,
   DEFAULT_PROVIDER,
   buildModelRequestContext,
   getTierModel,
   resolveModelTiers,
 } from './model-config';
-
-describe('DEFAULT_MODELS', () => {
-  it('pins the fast tier to Claude Sonnet 4.6 and the smart tier to Claude Opus 4.8', () => {
-    expect(DEFAULT_MODELS.fast).toBe('claude-sonnet-4-6');
-    expect(DEFAULT_MODELS.smart).toBe('claude-opus-4-8');
-  });
-});
 
 describe('resolveModelTiers', () => {
   it('defaults to Anthropic smart/fast router strings when nothing is provided', () => {

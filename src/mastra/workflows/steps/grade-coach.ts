@@ -216,54 +216,66 @@ export async function recordSessionInLedger(params: {
   });
 }
 
-export const gradeStep = createStep({
-  id: 'grade',
-  inputSchema: closedInterviewStateSchema,
-  outputSchema: gradedInterviewStateSchema,
-  execute: async ({ inputData, mastra, requestContext }) => {
-    const grade = await createSessionGrader(mastra.getAgent('grader'), requestContext)(
-      inputData.transcript,
-      inputData.targetLevel,
-    );
-    return { ...inputData, grade };
-  },
-});
+export function createGradeStep(options: { grader?: StructuredGenerator } = {}) {
+  return createStep({
+    id: 'grade',
+    inputSchema: closedInterviewStateSchema,
+    outputSchema: gradedInterviewStateSchema,
+    execute: async ({ inputData, mastra, requestContext }) => {
+      const grader = options.grader ?? mastra.getAgent('grader');
+      const grade = await createSessionGrader(grader, requestContext)(
+        inputData.transcript,
+        inputData.targetLevel,
+      );
+      return { ...inputData, grade };
+    },
+  });
+}
 
-export const coachStep = createStep({
-  id: 'coach',
-  inputSchema: gradedInterviewStateSchema,
-  outputSchema: coachedInterviewStateSchema,
-  execute: async ({ inputData, mastra, requestContext, runId }) => {
-    const ledgerKey = {
-      memory: candidateMemory,
-      candidateId: inputData.candidateId,
-      threadId: inputData.threadId,
-      runId,
-    };
-    const priorSessions = await readPriorSessions(ledgerKey);
+/** The production grade step, backed by the registered grader agent. */
+export const gradeStep = createGradeStep();
 
-    const coaching = await createCoachReporter(mastra.getAgent('coach'), requestContext)(
-      inputData.transcript,
-      inputData.grade,
-      inputData.targetLevel,
-      priorSessions,
-    );
+export function createCoachStep(options: { coach?: StructuredGenerator } = {}) {
+  return createStep({
+    id: 'coach',
+    inputSchema: gradedInterviewStateSchema,
+    outputSchema: coachedInterviewStateSchema,
+    execute: async ({ inputData, mastra, requestContext, runId }) => {
+      const ledgerKey = {
+        memory: candidateMemory,
+        candidateId: inputData.candidateId,
+        threadId: inputData.threadId,
+        runId,
+      };
+      const priorSessions = await readPriorSessions(ledgerKey);
 
-    // The ledger is auxiliary to the coaching itself: a write fault must not discard
-    // a finished coach report, so it degrades to a logged warning.
-    try {
-      await recordSessionInLedger({
-        ...ledgerKey,
-        date: new Date().toISOString(),
-        roleContext: inputData.roleContext,
-        transcriptLength: inputData.transcript.length,
-        grade: inputData.grade,
-        coaching,
-      });
-    } catch (error) {
-      mastra.getLogger()?.warn('Could not record the session in the coaching ledger.', { error });
-    }
+      const coach = options.coach ?? mastra.getAgent('coach');
+      const coaching = await createCoachReporter(coach, requestContext)(
+        inputData.transcript,
+        inputData.grade,
+        inputData.targetLevel,
+        priorSessions,
+      );
 
-    return { ...inputData, coaching };
-  },
-});
+      // The ledger is auxiliary to the coaching itself: a write fault must not discard
+      // a finished coach report, so it degrades to a logged warning.
+      try {
+        await recordSessionInLedger({
+          ...ledgerKey,
+          date: new Date().toISOString(),
+          roleContext: inputData.roleContext,
+          transcriptLength: inputData.transcript.length,
+          grade: inputData.grade,
+          coaching,
+        });
+      } catch (error) {
+        mastra.getLogger()?.warn('Could not record the session in the coaching ledger.', { error });
+      }
+
+      return { ...inputData, coaching };
+    },
+  });
+}
+
+/** The production coach step, backed by the registered coach agent. */
+export const coachStep = createCoachStep();

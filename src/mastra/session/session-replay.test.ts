@@ -4,38 +4,38 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Mastra } from '@mastra/core';
-import { Agent } from '@mastra/core/agent';
 import { createWorkflow } from '@mastra/core/workflows';
 import { LibSQLStore } from '@mastra/libsql';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { answerAssessmentSchema } from '../mastra/schemas/answer-assessment';
-import { candidateProfileSchema } from '../mastra/schemas/candidate-profile';
-import { coachReportSchema, sessionGradeSchema } from '../mastra/schemas/coach-report';
-import { EMPTY_COMPANY_BRIEF } from '../mastra/schemas/company-brief';
-import { directorDecisionSchema } from '../mastra/schemas/director-decision';
-import { roleContextSchema } from '../mastra/schemas/role-context';
-import type { BrainFactory } from '../mastra/interview/adaptive-brain';
-import { buildModelRequestContext, resolveModelTiers } from '../mastra/model-config';
-import { capLimitsSchema } from '../mastra/interview/interview-caps';
-import { interviewSnapshotPersistence } from '../mastra/workflows/interview-workflow';
+import { answerAssessmentSchema } from '../schemas/answer-assessment';
+import { candidateProfileSchema } from '../schemas/candidate-profile';
+import { coachReportSchema, sessionGradeSchema } from '../schemas/coach-report';
+import { EMPTY_COMPANY_BRIEF } from '../schemas/company-brief';
+import { directorDecisionSchema } from '../schemas/director-decision';
+import { roleContextSchema } from '../schemas/role-context';
+import type { BrainFactory } from '../interview/adaptive-brain';
+import { buildModelRequestContext, resolveModelTiers } from '../model-config';
+import { capLimitsSchema } from '../interview/interview-caps';
+import { interviewSnapshotPersistence } from '../workflows/interview-workflow';
 import {
   reportedInterviewStateSchema,
   researchOutputSchema,
-} from '../mastra/workflows/interview-state';
+} from '../workflows/interview-state';
 import {
   closingStep,
   collectLevelStep,
   createInterviewTurnStep,
   interviewLoopDone,
-} from '../mastra/workflows/steps/interview-loop';
-import { coachStep, gradeStep } from '../mastra/workflows/steps/grade-coach';
-import { createReportStep } from '../mastra/workflows/steps/report';
+} from '../workflows/steps/interview-loop';
+import { createCoachStep, createGradeStep } from '../workflows/steps/grade-coach';
+import { createReportStep } from '../workflows/steps/report';
+import type { StructuredGenerator } from '../structured-call';
 import {
   recoachSession,
   regradeSession,
   type InterviewWorkflowHandle,
-} from '../mastra/session/interview-session';
+} from './interview-session';
 
 // Counters that let each test prove which work re-ran on a replay: the interview brain
 // (director/interviewer/assessor) must NOT run again, while the grader and coach must.
@@ -91,40 +91,30 @@ function gradeForTurns(turns: number) {
   });
 }
 
-// A real Agent whose model never runs — generate is overridden to return canned
-// structured output, and the model function throws if the real path is ever reached.
-function stubAgent(id: string, generate: Agent['generate']): Agent {
-  const agent = new Agent({
-    id,
-    name: id,
-    instructions: 'test stub',
-    model: () => {
-      throw new Error(`${id} model should not be invoked in this test`);
-    },
-  });
-  agent.generate = generate;
-  return agent;
-}
+// Structured-generator fakes injected straight into the grade/coach steps — no real
+// Agent object and no model anywhere behind them.
+const grader: StructuredGenerator = {
+  async generate(_prompt, options) {
+    graderCalls.count += 1;
+    if (failMode === 'grade') throw new Error('injected grade failure');
+    // The grade step passes a transcript-length-specific schema; size the grade to it.
+    return { object: options.structuredOutput.schema.parse(gradeForTurns(2)) };
+  },
+};
 
-const grader = stubAgent('grader', (async (_prompt: string, options: { structuredOutput?: unknown }) => {
-  graderCalls.count += 1;
-  if (failMode === 'grade') throw new Error('injected grade failure');
-  const schema = (options.structuredOutput as { schema: { parse: (value: unknown) => unknown } }).schema;
-  // The grade step passes a transcript-length-specific schema; size the grade to it.
-  return { object: schema.parse(gradeForTurns(2)) };
-}) as unknown as Agent['generate']);
-
-const coach = stubAgent('coach', (async () => {
-  coachCalls.count += 1;
-  return {
-    object: coachReportSchema.parse({
-      summary: 'A candid read of the session.',
-      answerAdvice: [{ question: 'Question 1', diagnosis: 'Thin on specifics.', fix: 'Add a metric.' }],
-      drills: [],
-      studyPlan: 'Work on quantifying outcomes.',
-    }),
-  };
-}) as unknown as Agent['generate']);
+const coach: StructuredGenerator = {
+  async generate() {
+    coachCalls.count += 1;
+    return {
+      object: coachReportSchema.parse({
+        summary: 'A candid read of the session.',
+        answerAdvice: [{ question: 'Question 1', diagnosis: 'Thin on specifics.', fix: 'Add a metric.' }],
+        drills: [],
+        studyPlan: 'Work on quantifying outcomes.',
+      }),
+    };
+  },
+};
 
 const interviewTurnStep = createInterviewTurnStep(spyBrainFactory);
 
@@ -148,15 +138,17 @@ const regradeWorkflow = createWorkflow({
   .then(collectLevelStep)
   .dountil(interviewTurnStep, async (context) => interviewLoopDone(context))
   .then(closingStep)
-  .then(gradeStep)
-  .then(coachStep)
+  .then(createGradeStep({ grader }))
+  .then(createCoachStep({ coach }))
   .then(createReportStep({ reportsDir }))
   .commit();
 
+// The injected-fault tests drive runs to terminal failures on purpose; a silent logger
+// keeps the engine's expected "Error executing step" noise out of the test output.
 const mastra = new Mastra({
-  agents: { grader, coach },
   workflows: { regradeWorkflow },
   storage: new LibSQLStore({ id: 'regrade-test', url: ':memory:' }),
+  logger: false,
 });
 
 function handle(): InterviewWorkflowHandle {
@@ -246,9 +238,9 @@ describe('regradeSession / recoachSession', () => {
     expect(brainCalls.decide).toBe(0);
     expect(brainCalls.question).toBe(0);
     expect(brainCalls.assess).toBe(0);
-    // Grade and coach both re-ran, producing a fresh report on disk.
-    expect(graderCalls.count).toBeGreaterThan(0);
-    expect(coachCalls.count).toBeGreaterThan(0);
+    // Grade and coach both re-ran exactly once, producing a fresh report on disk.
+    expect(graderCalls.count).toBe(1);
+    expect(coachCalls.count).toBe(1);
     const state = reportedInterviewStateSchema.parse(outcome.result.result);
     expect(existsSync(state.reportPath)).toBe(true);
   });
@@ -272,7 +264,7 @@ describe('regradeSession / recoachSession', () => {
     // while coaching re-ran to write a fresh report.
     expect(brainCalls.question).toBe(0);
     expect(graderCalls.count).toBe(0);
-    expect(coachCalls.count).toBeGreaterThan(0);
+    expect(coachCalls.count).toBe(1);
     const state = reportedInterviewStateSchema.parse(outcome.result.result);
     expect(existsSync(state.reportPath)).toBe(true);
   });

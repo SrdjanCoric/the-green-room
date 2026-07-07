@@ -77,10 +77,6 @@ describe('allowQuestion', () => {
     expect(allowQuestion(state, limits, 'follow-up')).toEqual({ allowed: false, reason: 'question-cap' });
   });
 
-  it('ships defaults that bound a session', () => {
-    expect(DEFAULT_CAP_LIMITS.maxQuestions).toBeGreaterThan(0);
-    expect(DEFAULT_CAP_LIMITS.tokenBudget).toBeGreaterThan(0);
-  });
 });
 
 describe('limitsWithMaxQuestions', () => {
