@@ -4,7 +4,7 @@ import { Command } from 'commander';
 
 import { mastra } from '../mastra/index';
 import { buildModelRequestContext, resolveModelTiers } from '../mastra/model-config';
-import { interviewStateSchema } from '../mastra/workflows/interview-workflow';
+import { reportedInterviewStateSchema } from '../mastra/workflows/interview-workflow';
 import {
   describeDriveFailure,
   loadLastRun,
@@ -13,6 +13,7 @@ import {
   runInterview,
   type InterviewWorkflowHandle,
 } from './interview-session';
+import { listReports } from './reports';
 import {
   formatCompanyBrief,
   formatRoleContext,
@@ -56,7 +57,9 @@ function terminalPrompts(): {
 
 /** Print the closing summary of a finished interview: role, company, and transcript. */
 function reportInterview(rawState: unknown): void {
-  const state = interviewStateSchema.parse(rawState);
+  const state = reportedInterviewStateSchema.parse(rawState);
+  p.note(state.closingMessage, 'Closing');
+  p.note(state.reportPath, 'Report');
   p.note(formatRoleContext(state.roleContext), 'Role context');
   p.note(formatCompanyBrief(state.companyBrief), 'Company brief');
   p.note(formatTranscript(state.transcript), `Transcript · level: ${state.targetLevel}`);
@@ -238,6 +241,28 @@ program
 
       reportInterview(outcome.result.result);
       p.outro(`Interview ${runId} finished.`);
+    } catch (error) {
+      p.cancel(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('reports')
+  .description('List saved Markdown coaching reports, newest first.')
+  .action(async () => {
+    p.intro('interview-coach');
+    try {
+      const reports = await listReports();
+      if (reports.length === 0) {
+        p.outro('No reports found.');
+        return;
+      }
+      p.note(
+        reports.map((report) => `${report.modifiedAt.toISOString()}  ${report.path}`).join('\n'),
+        'Reports',
+      );
+      p.outro(`${reports.length} report${reports.length === 1 ? '' : 's'} found.`);
     } catch (error) {
       p.cancel(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
