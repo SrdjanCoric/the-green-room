@@ -9,7 +9,8 @@ export interface RunHistoryEntry {
   level?: string;
   /** ISO timestamp the run was started. */
   startedAt: string;
-  status: 'live' | 'done';
+  /** `failed` means the run settled in an error — reopening it retries the reconnect. */
+  status: 'live' | 'done' | 'failed';
 }
 
 /** Read the interview history, tolerating an absent or corrupt store. */

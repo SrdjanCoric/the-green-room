@@ -43,8 +43,10 @@ export function Sidebar({ history, activeRunId, onNew, onOpen }: SidebarProps) {
               <div className="role">{entry.role ?? 'Behavioral interview'}</div>
               {entry.company && <div className="co">{entry.company}</div>}
               <div className="run">
-                <span className={`status ${entry.status === 'done' ? 'done' : 'live'}`}>
-                  {entry.status === 'done' ? '★ closed' : '● now playing'}
+                <span className={`status ${entry.status}`}>
+                  {entry.status === 'done' && '★ closed'}
+                  {entry.status === 'live' && '● now playing'}
+                  {entry.status === 'failed' && '✕ went dark'}
                 </span>
                 {entry.level ? ` · ${entry.level}` : ''} · {formatDate(entry.startedAt)}
               </div>

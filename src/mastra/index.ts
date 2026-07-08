@@ -48,7 +48,10 @@ export const mastra = new Mastra({
   storage,
   // Backs resumable streaming: the server caches delivered workflow stream chunks by
   // run id and replays them through its observe endpoint, so a browser that dropped
-  // mid-stream can rejoin the same run where it left off.
+  // mid-stream can rejoin the same run where it left off. The observe endpoint (like
+  // the run endpoints generally) has no per-user authorization — run ids are
+  // unguessable UUIDs and this server is assumed to stay on localhost for a single
+  // user; gate the workflow run routes before ever binding it beyond that.
   cache: streamReplayCache,
   observability,
   logger: new PinoLogger({ name: 'interview-coach', level: 'info' }),

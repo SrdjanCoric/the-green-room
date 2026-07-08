@@ -2,7 +2,7 @@ import { MastraClient } from '@mastra/client-js';
 
 import type { StreamChunk } from './chunkInterpreter';
 import type { WorkflowOutcome } from './readOutcome';
-import { loadStreamOffset, saveStreamOffset } from './sessionStore';
+import { loadRunMeta, saveRunMeta } from './sessionStore';
 import { streamToEvents } from './streamToEvents';
 import type { EnsembleSelection, InterviewClient, InterviewEvent, StartInterviewInput } from './types';
 
@@ -34,8 +34,10 @@ interface TrackedRun {
  * The production {@link InterviewClient}: it drives the interview workflow over
  * `@mastra/client-js` with SSE streaming. `start`/`resume` open a stream that is
  * consumed incrementally and, when it ends, the run's persisted state is read back as
- * the authoritative suspend payload or final report (see {@link streamToEvents}). The
- * interview workflow and its agents are unchanged — this is a pure client.
+ * the authoritative suspend payload or final report (see {@link streamToEvents}).
+ * `observe` rejoins an in-flight run's stream by run id after a disconnect, resuming
+ * at the persisted chunk offset. The interview workflow and its agents are unchanged —
+ * this is a pure client.
  */
 export function createMastraInterviewClient(
   baseUrl: string = window.location.origin,
@@ -49,14 +51,52 @@ export function createMastraInterviewClient(
   // re-supplies the model tiers (Mastra doesn't persist request context across resume).
   const runs = new Map<string, TrackedRun>();
 
+  // The tracked run for a run id, rebuilt from persisted metadata when the in-memory
+  // map died with a previous page — the model-tier overrides must survive a reload,
+  // or every later resume silently falls back to the server's default models.
+  const trackRun = async (runId: string): Promise<TrackedRun> => {
+    const existing = runs.get(runId);
+    if (existing) return existing;
+    const tracked: TrackedRun = {
+      run: await workflow.createRun({ runId }),
+      requestContext: loadRunMeta(storage, runId).requestContext,
+    };
+    runs.set(runId, tracked);
+    return tracked;
+  };
+
   // The server caches every chunk it delivers over `stream`/`resumeStream`, keyed by
   // run id. Counting what this browser receives over those same transports keeps a
   // persisted mirror of that cache's length, so a reloaded page can rejoin the run's
-  // stream at the first chunk it hasn't seen. Observed (rejoined) streams replay
-  // without being re-cached, so they must not advance the count.
+  // stream at the first chunk it hasn't seen. Each write is one small setItem — cheap
+  // enough per chunk, and per-chunk durability is what makes a hard disconnect
+  // resumable mid-segment. Observed (rejoined) streams replay without being
+  // re-cached, so they must not advance the count.
   const trackOffset = (runId: string): (() => void) => {
-    let count = loadStreamOffset(storage, runId);
-    return () => saveStreamOffset(storage, runId, ++count);
+    const meta = loadRunMeta(storage, runId);
+    return () => {
+      meta.offset += 1;
+      saveRunMeta(storage, runId, meta);
+    };
+  };
+
+  // Arm the staleness floor for the duration of a resumed turn: while the turn is in
+  // flight, run-state writes at or before `floor` are the pre-resume suspend, not an
+  // outcome. Persisted so an observe after a mid-turn reload inherits it.
+  const armFloor = (runId: string, floor: number | undefined): void => {
+    if (floor === undefined) return;
+    saveRunMeta(storage, runId, { ...loadRunMeta(storage, runId), staleAsOf: floor });
+  };
+
+  // Disarm once a stream settles (reached its authoritative outcome) — a later
+  // observe of the genuinely-suspended run must accept the current state. Also the
+  // self-heal for a floor armed by a resume that never reached the server: that
+  // observe settles as failed, disarms, and the next attempt recovers the question.
+  const disarmFloor = (runId: string): void => {
+    const meta = loadRunMeta(storage, runId);
+    if (meta.staleAsOf === undefined) return;
+    delete meta.staleAsOf;
+    saveRunMeta(storage, runId, meta);
   };
 
   const readRunState = async (runId: string): Promise<WorkflowOutcome | undefined> => {
@@ -95,8 +135,9 @@ export function createMastraInterviewClient(
         const requestContext = buildRequestContext(input.ensemble);
         const run = await workflow.createRun({ runId: input.threadId });
         runs.set(run.runId, { run, requestContext });
-        // A fresh run starts a fresh chunk count (the thread id is new, but be safe).
-        saveStreamOffset(storage, run.runId, 0);
+        // A fresh run starts fresh bookkeeping; the model tiers persist with it so a
+        // reloaded page resumes with the same ensemble.
+        saveRunMeta(storage, run.runId, { offset: 0, requestContext });
         const stream = await run.stream({
           inputData: buildInputData(input),
           requestContext,
@@ -113,34 +154,37 @@ export function createMastraInterviewClient(
       resumeData: { answer: string } | { level: string } | { retry: true },
     ): AsyncIterable<InterviewEvent> {
       return (async function* (): AsyncGenerator<InterviewEvent> {
-        const tracked = runs.get(runId) ?? { run: await workflow.createRun({ runId }) };
-        runs.set(runId, tracked);
+        const tracked = await trackRun(runId);
         // The staleness floor is the newest write time seen while settling the previous
         // turn. Only a cold resume (nothing seen yet) needs to read it from the server.
         if (tracked.lastWriteTime === undefined) {
           const before = await readRunState(runId);
           tracked.lastWriteTime = writeTime(before?.updatedAt);
         }
+        armFloor(runId, tracked.lastWriteTime);
         const stream = await tracked.run.resumeStream({
           resumeData,
           requestContext: tracked.requestContext,
         });
         yield* consumeStream(stream, fetchOutcome(runId, tracked.lastWriteTime), trackOffset(runId));
+        disarmFloor(runId);
       })();
     },
 
     observe(runId: string): AsyncIterable<InterviewEvent> {
       return (async function* (): AsyncGenerator<InterviewEvent> {
-        const tracked = runs.get(runId) ?? { run: await workflow.createRun({ runId }) };
-        runs.set(runId, tracked);
+        const tracked = await trackRun(runId);
+        const meta = loadRunMeta(storage, runId);
         // Replay skips the chunks this browser already received; the server then
         // re-plays the in-flight segment from its start (each segment opens with
         // `workflow-start`/step-start chunks), so the interpreter's start-over events
         // rebuild the current section without duplicating settled content. When the
         // live stream is gone entirely (server restart), the stream closes at once
-        // and the run's persisted state below settles the turn.
-        const stream = await tracked.run.observe({ offset: loadStreamOffset(storage, runId) });
-        yield* consumeStream(stream, fetchOutcome(runId));
+        // and the run's persisted state below settles the turn. The armed floor
+        // carries a mid-turn reload past the pre-resume suspend.
+        const stream = await tracked.run.observe({ offset: meta.offset });
+        yield* consumeStream(stream, fetchOutcome(runId, meta.staleAsOf));
+        disarmFloor(runId);
       })();
     },
   };

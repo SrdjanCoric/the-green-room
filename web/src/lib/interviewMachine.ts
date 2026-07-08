@@ -176,9 +176,17 @@ function applyEvent(state: InterviewState, event: InterviewEvent): InterviewStat
       if (event.suspend.kind === 'failure') {
         return { ...state, phase: 'turnFailed', error: event.suspend.reason, cue: null };
       }
+      // A restored snapshot can hold an answer the run never received (the page
+      // died between submit and the resume reaching the server). If the run is
+      // still suspended on that same question, the trailing entry is that lost
+      // answer — drop it so the re-answered turn isn't recorded twice.
       return {
         ...state,
         phase: 'awaitingAnswer',
+        transcript:
+          state.transcript.at(-1)?.question === event.suspend.question
+            ? state.transcript.slice(0, -1)
+            : state.transcript,
         currentQuestion: event.suspend.question,
         currentQuestionNumber: event.suspend.questionNumber,
         cue: null,

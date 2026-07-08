@@ -231,6 +231,42 @@ describe('interviewReducer', () => {
     expect(state.phase).toBe('grading');
   });
 
+  it('drops a transcript entry whose answer never reached the run when the same question re-suspends', () => {
+    // Reload in the window between submitting an answer and the resume reaching the
+    // server: the snapshot already shows the question answered, but the run is still
+    // suspended on it. Settling on that same question must not leave it in the
+    // transcript twice once it is answered again.
+    const snapshot = {
+      ...initialInterviewState,
+      phase: 'assessing' as const,
+      runId: 'run-1',
+      transcript: [
+        { question: 'Q1?', answer: 'A1.' },
+        { question: 'Q2?', answer: 'The answer the run never got.' },
+      ],
+    };
+    let state = interviewReducer(initialInterviewState, {
+      type: 'RECONNECT',
+      runId: 'run-1',
+      snapshot,
+    });
+
+    state = interviewReducer(state, {
+      type: 'EVENT',
+      event: { type: 'suspended', suspend: { kind: 'question', question: 'Q2?', questionNumber: 2 } },
+    });
+
+    expect(state.transcript).toEqual([{ question: 'Q1?', answer: 'A1.' }]);
+    expect(state.currentQuestion).toBe('Q2?');
+
+    // Answering again records the turn exactly once.
+    state = interviewReducer(state, { type: 'SUBMIT_ANSWER', answer: 'A2, again.' });
+    expect(state.transcript).toEqual([
+      { question: 'Q1?', answer: 'A1.' },
+      { question: 'Q2?', answer: 'A2, again.' },
+    ]);
+  });
+
   it('holds a failed turn as retryable rather than dead, then retries it', () => {
     let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'run-1' });
     state = interviewReducer(state, {
