@@ -38,7 +38,7 @@ describe('InterviewScreen', () => {
       />,
     );
 
-    expect(screen.getByText('Proudest work?')).toBeInTheDocument();
+    expect(await screen.findByText('Proudest work?')).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText(/your answer/i), 'I led a migration.');
     await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
 
@@ -59,7 +59,7 @@ describe('InterviewScreen', () => {
     expect(onSubmitAnswer).not.toHaveBeenCalled();
   });
 
-  it('shows the streaming question without an answer box while it types in', () => {
+  it('shows the streaming question without an answer box while it types in', async () => {
     render(
       <InterviewScreen
         state={stateWith({ phase: 'streamingQuestion', currentQuestion: 'Walk me' })}
@@ -68,8 +68,25 @@ describe('InterviewScreen', () => {
       />,
     );
 
-    expect(screen.getByText(/walk me/i)).toBeInTheDocument();
+    expect(await screen.findByText(/walk me/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+  });
+
+  it('types the question out over time instead of stamping it', async () => {
+    render(
+      <InterviewScreen
+        state={stateWith({
+          phase: 'streamingQuestion',
+          currentQuestion: 'Walk me through the hardest bug you fixed.',
+        })}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    // The tail of the question is not on screen at first; it types in.
+    expect(screen.queryByText(/hardest bug you fixed/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/hardest bug you fixed/i)).toBeInTheDocument();
   });
 
   it('streams the director-notes preview while the report is being written', () => {
@@ -99,7 +116,10 @@ describe('InterviewScreen', () => {
     );
 
     expect(screen.getByText(/what level are you targeting/i)).toBeInTheDocument();
-    await userEvent.type(screen.getByLabelText(/target level/i), 'staff');
+
+    // Deliver confirms the clicked selection, and is inert until one is made.
+    expect(screen.getByRole('button', { name: /deliver/i })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: /^staff$/i }));
     await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
 
     expect(onSubmitLevel).toHaveBeenCalledWith('staff');

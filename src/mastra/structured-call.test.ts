@@ -3,11 +3,11 @@ import { RequestContext } from '@mastra/core/request-context';
 import { z } from 'zod';
 
 import {
+  streamingTextCall,
   structuredCall,
-  textCall,
   type GenerateToolHooks,
   type StructuredGenerator,
-  type TextGenerator,
+  type TextStreamer,
 } from './structured-call';
 
 const shapeSchema = z.object({ name: z.string(), count: z.number().int() });
@@ -152,6 +152,27 @@ describe('structuredCall extras', () => {
     expect(seen[0]?.abortSignal).toBe(controller.signal);
   });
 
+  it("requests errorStrategy 'warn' so an invalid object comes back for the feedback retry", async () => {
+    // Mastra's default is 'strict', which throws on a schema violation before the
+    // object ever reaches this module — silently bypassing the feedback-augmented
+    // retry. 'warn' hands the raw object back, keeping the local safeParse the one
+    // validator that drives the retry prompt.
+    const seen: Parameters<StructuredGenerator['generate']>[1][] = [];
+    const agent: StructuredGenerator = {
+      async generate(_prompt, options) {
+        seen.push(options);
+        return { object: { name: 'a', count: 1 } };
+      },
+    };
+
+    await structuredCall(agent, 'extract things', shapeSchema, new RequestContext(), {
+      description: 'researcher',
+    });
+
+    expect(seen[0]?.structuredOutput.schema).toBe(shapeSchema);
+    expect(seen[0]?.structuredOutput.errorStrategy).toBe('warn');
+  });
+
   it('builds fresh hooks per attempt when given a factory, so per-call budgets reset on retry', async () => {
     const built: GenerateToolHooks[] = [];
     const received: (GenerateToolHooks | undefined)[] = [];
@@ -181,41 +202,95 @@ describe('structuredCall extras', () => {
   });
 });
 
-function fakeTextGenerator(
+/**
+ * A fake streamer that replays queued replies (texts or errors) and records prompts.
+ * Each reply streams word-sized `text-delta` chunks plus a `finish` chunk, mirroring
+ * the chunk mix of a real agent stream.
+ */
+function fakeTextStreamer(
   outcomes: ({ text: string } | { throws: unknown })[],
-): { agent: TextGenerator; calls: GenerateCall[] } {
+): { agent: TextStreamer; calls: GenerateCall[] } {
   const calls: GenerateCall[] = [];
   const queue = [...outcomes];
   return {
     calls,
     agent: {
-      async generate(prompt) {
+      async stream(prompt) {
         calls.push({ prompt });
         const next = queue.shift();
-        if (!next) throw new Error('fake generator ran out of queued outcomes');
+        if (!next) throw new Error('fake streamer ran out of queued outcomes');
         if ('throws' in next) throw next.throws;
-        return next;
+        const { text } = next;
+        return {
+          fullStream: (async function* () {
+            for (const piece of text.split(/(?<= )/)) {
+              yield { type: 'text-delta', payload: { text: piece } };
+            }
+            yield { type: 'finish' };
+          })(),
+          text: Promise.resolve(text),
+        };
       },
     },
   };
 }
 
-describe('textCall', () => {
+describe('streamingTextCall', () => {
   it('returns the trimmed text on first success', async () => {
-    const { agent } = fakeTextGenerator([{ text: '  What did you build?  ' }]);
+    const { agent } = fakeTextStreamer([{ text: '  What did you build?  ' }]);
 
-    const result = await textCall(agent, 'ask a question', new RequestContext(), {
+    const result = await streamingTextCall(agent, 'ask a question', new RequestContext(), {
       description: 'interviewer',
     });
 
     expect(result).toBe('What did you build?');
   });
 
+  it('forwards only the text-delta chunks to the sink', async () => {
+    const { agent } = fakeTextStreamer([{ text: 'What did you build?' }]);
+    const written: unknown[] = [];
+
+    await streamingTextCall(agent, 'ask a question', new RequestContext(), {
+      description: 'interviewer',
+      sink: {
+        write: async (chunk) => {
+          written.push(chunk);
+        },
+      },
+    });
+
+    expect(written).toEqual([
+      { type: 'text-start', payload: {} },
+      { type: 'text-delta', payload: { text: 'What ' } },
+      { type: 'text-delta', payload: { text: 'did ' } },
+      { type: 'text-delta', payload: { text: 'you ' } },
+      { type: 'text-delta', payload: { text: 'build?' } },
+    ]);
+  });
+
+  it('re-opens the sink with a text-start on each retry so a consumer can drop the failed attempt', async () => {
+    const { agent } = fakeTextStreamer([{ text: '   ' }, { text: 'What did you build?' }]);
+    const written: { type: string }[] = [];
+
+    await streamingTextCall(agent, 'ask a question', new RequestContext(), {
+      description: 'interviewer',
+      sink: {
+        write: async (chunk) => {
+          written.push(chunk as { type: string });
+        },
+      },
+    });
+
+    // Attempt 1 (whitespace reply) and attempt 2 each open their own text-start.
+    expect(written.filter((chunk) => chunk.type === 'text-start')).toHaveLength(2);
+    expect(written[0]).toEqual({ type: 'text-start', payload: {} });
+  });
+
   it('retries an empty reply with feedback and gives up after the attempts', async () => {
-    const { agent, calls } = fakeTextGenerator([{ text: '' }, { text: '   ' }]);
+    const { agent, calls } = fakeTextStreamer([{ text: '' }, { text: '   ' }]);
 
     await expect(
-      textCall(agent, 'ask a question', new RequestContext(), {
+      streamingTextCall(agent, 'ask a question', new RequestContext(), {
         description: 'interviewer',
         attempts: 2,
       }),
@@ -226,10 +301,10 @@ describe('textCall', () => {
 
   it('fails fast on a non-retryable error', async () => {
     const unauthorized = Object.assign(new Error('forbidden'), { status: 403 });
-    const { agent, calls } = fakeTextGenerator([{ throws: unauthorized }]);
+    const { agent, calls } = fakeTextStreamer([{ throws: unauthorized }]);
 
     await expect(
-      textCall(agent, 'ask a question', new RequestContext(), { description: 'interviewer' }),
+      streamingTextCall(agent, 'ask a question', new RequestContext(), { description: 'interviewer' }),
     ).rejects.toThrow(/forbidden/);
     expect(calls).toHaveLength(1);
   });

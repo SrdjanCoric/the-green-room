@@ -68,6 +68,26 @@ describe('readOutcome', () => {
     expect(event).toEqual({ type: 'suspended', suspend: { kind: 'level', prompt: 'What level?' } });
   });
 
+  it('ignores the stale suspendPayload a completed step keeps in the run state', () => {
+    // After the level is answered, collectLevel is success but still carries its old
+    // payload; the currently suspended interview turn must win.
+    const event = readOutcome({
+      status: 'suspended',
+      steps: {
+        collectLevel: { status: 'success', suspendPayload: { kind: 'level', prompt: 'What level?' } },
+        interviewTurn: {
+          status: 'suspended',
+          suspendPayload: { kind: 'question', question: 'First question?', questionNumber: 1 },
+        },
+      },
+    });
+
+    expect(event).toEqual({
+      type: 'suspended',
+      suspend: { kind: 'question', question: 'First question?', questionNumber: 1 },
+    });
+  });
+
   it('maps a successful result into the report the screen renders', () => {
     const event = readOutcome({
       status: 'success',

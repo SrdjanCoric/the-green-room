@@ -22,7 +22,7 @@ export interface StructuredGenerator {
   generate(
     prompt: string,
     options: {
-      structuredOutput: { schema: z.ZodType };
+      structuredOutput: { schema: z.ZodType; errorStrategy: 'warn' };
       requestContext: RequestContext;
       maxSteps?: number;
       hooks?: GenerateToolHooks;
@@ -31,9 +31,25 @@ export interface StructuredGenerator {
   ): Promise<{ object?: unknown }>;
 }
 
-/** The plain-text sibling of {@link StructuredGenerator}, for agents that answer in prose. */
-export interface TextGenerator {
-  generate(prompt: string, options: { requestContext: RequestContext }): Promise<{ text: string }>;
+/**
+ * The plain-text sibling of {@link StructuredGenerator}, for agents that answer in
+ * prose. The reply is consumed as a chunk stream so tokens can be forwarded to a
+ * watching client while they arrive; the real Mastra `Agent.stream` satisfies it
+ * structurally.
+ */
+export interface TextStreamer {
+  stream(
+    prompt: string,
+    options: { requestContext: RequestContext },
+  ): Promise<{
+    fullStream: AsyncIterable<{ type: string }>;
+    text: Promise<string>;
+  }>;
+}
+
+/** Where forwarded chunks go; a workflow step's `writer` satisfies it structurally. */
+export interface ChunkSink {
+  write(chunk: unknown): Promise<void>;
 }
 
 export interface StructuredCallOptions {
@@ -159,8 +175,11 @@ export async function structuredCall<Schema extends z.ZodType>(
     what: 'structured output',
     attempt: async (currentPrompt) => {
       const hooks = typeof options.hooks === 'function' ? options.hooks() : options.hooks;
+      // 'warn' (not the default 'strict', which throws inside Mastra before the
+      // object ever gets here) hands a schema-violating object back, keeping the
+      // safeParse below the single validator whose issues feed the retry prompt.
       const result = await agent.generate(currentPrompt, {
-        structuredOutput: { schema },
+        structuredOutput: { schema, errorStrategy: 'warn' },
         requestContext,
         ...(options.maxSteps !== undefined ? { maxSteps: options.maxSteps } : {}),
         ...(hooks ? { hooks } : {}),
@@ -184,13 +203,16 @@ export async function structuredCall<Schema extends z.ZodType>(
 
 /**
  * Call an agent for a plain-text reply with the same retry discipline as
- * {@link structuredCall}: an empty reply counts as a validation failure.
+ * {@link structuredCall}: an empty reply counts as a validation failure. The reply is
+ * streamed, and each `text-delta` chunk is forwarded to `sink` as it arrives — inside
+ * a workflow step that is the step's `writer`, so a client watching the run stream
+ * sees the reply typed out live. The full trimmed text is the return value either way.
  */
-export async function textCall(
-  agent: TextGenerator,
+export async function streamingTextCall(
+  agent: TextStreamer,
   prompt: string,
   requestContext: RequestContext,
-  options: StructuredCallOptions,
+  options: StructuredCallOptions & { sink?: ChunkSink },
 ): Promise<string> {
   return withValidationRetries({
     prompt,
@@ -198,8 +220,20 @@ export async function textCall(
     description: options.description,
     what: 'reply text',
     attempt: async (currentPrompt) => {
-      const result = await agent.generate(currentPrompt, { requestContext });
-      const text = result.text.trim();
+      const stream = await agent.stream(currentPrompt, { requestContext });
+      // Each attempt opens with a `text-start` before its first token, so a consumer
+      // accumulating deltas can discard a failed attempt's partial text when a
+      // validation retry streams the reply again, instead of appending the two.
+      let opened = false;
+      for await (const chunk of stream.fullStream) {
+        if (chunk.type !== 'text-delta') continue;
+        if (!opened) {
+          opened = true;
+          await options.sink?.write({ type: 'text-start', payload: {} });
+        }
+        await options.sink?.write(chunk);
+      }
+      const text = (await stream.text).trim();
       if (!text) {
         return {
           ok: false,

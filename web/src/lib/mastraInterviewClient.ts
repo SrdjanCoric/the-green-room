@@ -8,8 +8,12 @@ import type { EnsembleSelection, InterviewClient, InterviewEvent, StartInterview
 /** The workflow key the interview run is registered under in `src/mastra/index.ts`. */
 const WORKFLOW_ID = 'interviewWorkflow';
 
-/** Run-state fields the authoritative outcome reader needs from `runById`. */
-const OUTCOME_FIELDS = ['status', 'result', 'steps'];
+/**
+ * Run-state fields the authoritative outcome reader needs from `runById`. `status` is
+ * not listed because the server always includes it (requesting it is rejected as an
+ * invalid field name).
+ */
+const OUTCOME_FIELDS = ['result', 'error', 'steps'];
 
 type WorkflowRun = Awaited<ReturnType<ReturnType<MastraClient['getWorkflow']>['createRun']>>;
 
@@ -17,6 +21,12 @@ type WorkflowRun = Awaited<ReturnType<ReturnType<MastraClient['getWorkflow']>['c
 interface TrackedRun {
   run: WorkflowRun;
   requestContext?: Record<string, string>;
+  /**
+   * The newest snapshot write time any poll has seen for this run. A resume passes it
+   * as the staleness floor, so polls racing the resume can tell the pre-resume
+   * suspended state (what the user just answered) apart from real progress.
+   */
+  lastWriteTime?: number;
 }
 
 /**
@@ -37,7 +47,7 @@ export function createMastraInterviewClient(
   // re-supplies the model tiers (Mastra doesn't persist request context across resume).
   const runs = new Map<string, TrackedRun>();
 
-  const fetchOutcome = (runId: string) => async (): Promise<WorkflowOutcome | undefined> => {
+  const readRunState = async (runId: string): Promise<WorkflowOutcome | undefined> => {
     try {
       return (await workflow.runById(runId, {
         fields: OUTCOME_FIELDS,
@@ -46,6 +56,26 @@ export function createMastraInterviewClient(
       return undefined;
     }
   };
+
+  // The run's snapshot is only rewritten when the workflow persists new progress, so a
+  // poll racing a fresh resume still reads the pre-resume suspended state — the very
+  // suspend the user just answered. Anything not newer than `staleAsOf` is not an
+  // outcome yet; returning undefined keeps the poll loop waiting. Every read also
+  // records its write time on the tracked run, so the next resume knows the floor
+  // without an extra request.
+  const fetchOutcome =
+    (runId: string, staleAsOf?: number) => async (): Promise<WorkflowOutcome | undefined> => {
+      const state = await readRunState(runId);
+      const written = writeTime(state?.updatedAt);
+      if (written !== undefined) {
+        const tracked = runs.get(runId);
+        if (tracked) tracked.lastWriteTime = Math.max(written, tracked.lastWriteTime ?? 0);
+      }
+      if (staleAsOf !== undefined && written !== undefined && written <= staleAsOf) {
+        return undefined;
+      }
+      return state;
+    };
 
   return {
     start(input: StartInterviewInput): { runId: string; events: AsyncIterable<InterviewEvent> } {
@@ -71,14 +101,27 @@ export function createMastraInterviewClient(
       return (async function* (): AsyncGenerator<InterviewEvent> {
         const tracked = runs.get(runId) ?? { run: await workflow.createRun({ runId }) };
         runs.set(runId, tracked);
+        // The staleness floor is the newest write time seen while settling the previous
+        // turn. Only a cold resume (nothing seen yet) needs to read it from the server.
+        if (tracked.lastWriteTime === undefined) {
+          const before = await readRunState(runId);
+          tracked.lastWriteTime = writeTime(before?.updatedAt);
+        }
         const stream = await tracked.run.resumeStream({
           resumeData,
           requestContext: tracked.requestContext,
         });
-        yield* consumeStream(stream, fetchOutcome(runId));
+        yield* consumeStream(stream, fetchOutcome(runId, tracked.lastWriteTime));
       })();
     },
   };
+}
+
+/** A snapshot write time as epoch millis, from the string or Date the server hands back. */
+function writeTime(value: string | Date | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? undefined : time;
 }
 
 function buildInputData(input: StartInterviewInput): Record<string, unknown> {

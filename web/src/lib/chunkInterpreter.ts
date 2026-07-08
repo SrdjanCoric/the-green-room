@@ -32,7 +32,7 @@ const STEP_CUES: StepCue[] = [
   { match: /role/i, label: 'Sizing up the role', section: null },
   { match: /research|company/i, label: 'Researching the company', section: null },
   { match: /director/i, label: 'Choosing the next question…', section: 'question' },
-  { match: /interview|question|turn/i, label: 'Writing the question…', section: 'question' },
+  { match: /interview|question|turn/i, label: 'Loading the next question…', section: 'question' },
   { match: /assess/i, label: 'Weighing your answer…', section: null },
   { match: /grade/i, label: 'Grading your answers…', section: 'report' },
   { match: /coach|report/i, label: "Writing the director's notes…", section: 'report' },
@@ -51,13 +51,21 @@ export function createChunkInterpreter(): ChunkInterpreter {
   let section: ActiveSection = null;
 
   return {
-    next(chunk: StreamChunk): InterviewEvent | null {
+    next(outer: StreamChunk): InterviewEvent | null {
+      const chunk = unwrapStepOutput(outer);
       const stepId = readStepId(chunk);
       if (stepId !== undefined) {
         const cue = STEP_CUES.find((c) => c.match.test(stepId));
         if (!cue) return null;
         section = cue.section;
         return { type: 'cue', label: cue.label };
+      }
+
+      // A new reply opens: whatever streamed before it was a failed attempt's text.
+      if (chunk.type === 'text-start') {
+        if (section === 'question') return { type: 'question-start' };
+        if (section === 'report') return { type: 'report-start' };
+        return null;
       }
 
       const text = readTextDelta(chunk);
@@ -69,6 +77,21 @@ export function createChunkInterpreter(): ChunkInterpreter {
       return null;
     },
   };
+}
+
+/**
+ * Unwrap a `workflow-step-output` envelope. A workflow step forwards nested chunks
+ * (agent token deltas) through its `writer`, and each one arrives wrapped under
+ * `payload.output`; envelopes can nest, so unwrap until a plain chunk surfaces.
+ */
+function unwrapStepOutput(chunk: StreamChunk): StreamChunk {
+  let current = chunk;
+  for (;;) {
+    if (current.type !== 'workflow-step-output') return current;
+    const output = asRecord(asRecord(current.payload)?.output);
+    if (!output) return current;
+    current = output as StreamChunk;
+  }
 }
 
 /** Read a workflow step id from a step-transition chunk, probing known field paths. */
