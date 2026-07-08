@@ -6,6 +6,7 @@ import { Command, InvalidArgumentError } from 'commander';
 import { describeError } from '../mastra/errors';
 import { limitsWithMaxQuestions } from '../mastra/interview/interview-caps';
 import { buildModelRequestContext, resolveModelTiers } from '../mastra/model-config';
+import { grantCvPathTrust } from '../mastra/server/cv-path-guard';
 import { reportedInterviewStateSchema } from '../mastra/workflows/interview-state';
 import {
   describeDriveFailure,
@@ -140,7 +141,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       '--max-questions <count>',
-      'ceiling on the number of questions asked in the session (default: 6)',
+      'ceiling on the number of questions asked in the session (default: 20)',
       parsePositiveInt,
     )
     .action(
@@ -183,6 +184,10 @@ export function buildProgram(deps: CliDeps): Command {
         }
 
         const requestContext = buildModelRequestContext(resolveModelTiers(options));
+        // The operator supplies their own CV path, so mark this in-process run as
+        // trusted; runs started over the Mastra server never get this grant and stay
+        // confined to the uploads directory.
+        grantCvPathTrust(requestContext);
         const threadId = randomUUID();
 
         const spinner = p.spinner();

@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RequestContext } from '@mastra/core/request-context';
 import { z } from 'zod';
 
 import {
   streamingTextCall,
   structuredCall,
+  TRANSIENT_RETRY_BASE_MS,
   type GenerateToolHooks,
   type StructuredGenerator,
   type TextStreamer,
@@ -89,18 +90,81 @@ describe('structuredCall', () => {
   });
 
   it('retries a transient provider error (429) and succeeds', async () => {
-    const rateLimited = Object.assign(new Error('rate limited'), { status: 429 });
-    const { agent, calls } = fakeGenerator([
-      { throws: rateLimited },
-      { object: { name: 'a', count: 1 } },
-    ]);
+    vi.useFakeTimers();
+    try {
+      const rateLimited = Object.assign(new Error('rate limited'), { status: 429 });
+      const { agent, calls } = fakeGenerator([
+        { throws: rateLimited },
+        { object: { name: 'a', count: 1 } },
+      ]);
 
-    const result = await structuredCall(agent, 'extract things', shapeSchema, new RequestContext(), {
-      description: 'thing extractor',
-    });
+      const promise = structuredCall(agent, 'extract things', shapeSchema, new RequestContext(), {
+        description: 'thing extractor',
+      });
+      await vi.runAllTimersAsync();
 
-    expect(result).toEqual({ name: 'a', count: 1 });
-    expect(calls).toHaveLength(2);
+      expect(await promise).toEqual({ name: 'a', count: 1 });
+      expect(calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off exponentially between transient retries instead of retrying back-to-back', async () => {
+    vi.useFakeTimers();
+    // Pin jitter to its ceiling so each wait is exactly the attempt's full backoff cap.
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    try {
+      const rateLimited = Object.assign(new Error('rate limited'), { status: 429 });
+      const { agent, calls } = fakeGenerator([
+        { throws: rateLimited },
+        { throws: rateLimited },
+        { object: { name: 'a', count: 1 } },
+      ]);
+
+      const promise = structuredCall(agent, 'extract things', shapeSchema, new RequestContext(), {
+        description: 'thing extractor',
+      });
+
+      // The first attempt fails; the second must not fire until the backoff elapses.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(TRANSIENT_RETRY_BASE_MS - 1);
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toHaveLength(2);
+
+      // The second failure waits twice as long before the third attempt.
+      await vi.advanceTimersByTimeAsync(TRANSIENT_RETRY_BASE_MS * 2 - 1);
+      expect(calls).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toHaveLength(3);
+
+      expect(await promise).toEqual({ name: 'a', count: 1 });
+    } finally {
+      vi.mocked(Math.random).mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps validation-feedback retries immediate — no backoff on a schema violation', async () => {
+    vi.useFakeTimers();
+    try {
+      const { agent, calls } = fakeGenerator([
+        { object: { name: 'a', count: 1.5 } },
+        { object: { name: 'a', count: 2 } },
+      ]);
+
+      const promise = structuredCall(agent, 'extract things', shapeSchema, new RequestContext(), {
+        description: 'thing extractor',
+      });
+      // Flush microtasks only; no timer must be needed for the retry to run.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(2);
+      expect(await promise).toEqual({ name: 'a', count: 2 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('fails fast on a non-retryable auth error without burning attempts', async () => {

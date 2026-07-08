@@ -30,6 +30,25 @@ describe('answerAssessmentSchema', () => {
     expect(parsed.claimsWorthChasing).toEqual([]);
   });
 
+  it('defaults threadDry to false, so assessments persisted before the flag still parse', () => {
+    const parsed = answerAssessmentSchema.parse({
+      star: { situation: false, task: false, action: false, result: false, quantifiedResult: false },
+      sufficientSignal: false,
+    });
+
+    expect(parsed.threadDry).toBe(false);
+  });
+
+  it('carries an explicit dry-thread verdict', () => {
+    const parsed = answerAssessmentSchema.parse({
+      star: { situation: false, task: false, action: true, result: false, quantifiedResult: false },
+      sufficientSignal: false,
+      threadDry: true,
+    });
+
+    expect(parsed.threadDry).toBe(true);
+  });
+
   it('rejects an assessment missing a STAR flag', () => {
     const result = answerAssessmentSchema.safeParse({
       star: { situation: true, task: true, action: true, result: true },

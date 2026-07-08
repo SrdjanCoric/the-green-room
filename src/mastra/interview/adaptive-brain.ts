@@ -148,6 +148,15 @@ export function renderAssessments(log: TopicAssessment[]): string {
   if (log.length === 0) return 'No answers assessed yet.';
   return log
     .map((entry, index) => {
+      // A dry thread renders as its own verdict, with the gaps and chaseable claims
+      // withheld: they are exactly the hooks that tempt the director to keep probing a
+      // topic that has stopped giving, which is what the dry flag exists to end.
+      if (entry.assessment.threadDry) {
+        return (
+          `After answer ${index + 1} (topic: ${entry.topic}): the thread is dry - ` +
+          'answers on it are thinning; treat the topic as exhausted and open new ground'
+        );
+      }
       const signal = entry.assessment.sufficientSignal
         ? 'the topic holds enough signal'
         : 'the topic needs more signal';
@@ -219,7 +228,7 @@ export function buildDirectorPrompt(state: BrainState, nudge: DirectorNudge = NO
     )}\n</profile>\n` +
     transcriptBlock +
     `Assessment notes so far: ${renderAssessments(state.assessments)}\n` +
-    `Questions asked so far: ${state.coverage.questionCount}. You have a budget of ${state.limits.maxQuestions} questions for the whole session - a ceiling, never a target: wrap up as soon as the signal is sufficient.\n` +
+    `Questions asked so far: ${state.coverage.questionCount} of a hard cap of ${state.limits.maxQuestions}.\n` +
     `Consecutive follow-ups on the current topic: ${state.coverage.consecutiveFollowUps} of a hard cap of ${state.limits.maxConsecutiveFollowUps}.\n` +
     `Reprompts on the current question: ${state.coverage.repromptCount} of a hard cap of ${state.limits.maxReprompts}.\n` +
     (nudge.followUpsExhausted ? FOLLOW_UPS_EXHAUSTED_LINE : '') +

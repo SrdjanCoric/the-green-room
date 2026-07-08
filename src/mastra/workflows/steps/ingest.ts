@@ -1,7 +1,7 @@
 import { createStep } from '@mastra/core/workflows';
 import type { RequestContext } from '@mastra/core/request-context';
 
-import { assertCvPathAllowed, CV_PATH_TRUST_ENV } from '../../server/cv-path-guard';
+import { assertCvPathAllowed, isTrustedCvContext } from '../../server/cv-path-guard';
 import { uploadsDir } from '../../server/uploads-dir';
 import { extractCvText } from '../../tools/extract-cv';
 import { parseCandidateWorkingMemory } from '../../interview/coaching-ledger';
@@ -238,11 +238,12 @@ export function createIngestStep(boundaries: IngestBoundaries = {}) {
     outputSchema: ingestOutputSchema,
     execute: async ({ inputData, mastra, requestContext, writer }) => {
       // Over the Mastra server `cvPath` is client-controlled, so confine it to the
-      // upload directory unless a trusted process (the CLI) opts out. Without this the
-      // ingest step would read any file on the host — see the `ingestInputSchema` note.
+      // upload directory unless this run's context was granted trust in-process (the
+      // CLI). Without this the ingest step would read any file on the host — see the
+      // `ingestInputSchema` note.
       assertCvPathAllowed(inputData.cvPath, {
         uploadsDir,
-        trustLocalPaths: process.env[CV_PATH_TRUST_ENV] === '1',
+        trustLocalPaths: isTrustedCvContext(requestContext),
       });
       const cvText = await readCv(inputData.cvPath);
       const { candidateId, candidateIdOrigin } = resolveCandidateIdentity({

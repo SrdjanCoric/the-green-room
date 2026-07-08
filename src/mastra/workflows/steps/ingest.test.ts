@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { Mastra } from '@mastra/core';
 import { RequestContext } from '@mastra/core/request-context';
@@ -9,7 +9,7 @@ import { candidateWorkingMemorySchema } from '../../interview/coaching-ledger';
 import { candidateMemory } from '../../memory';
 import { candidateProfileSchema } from '../../schemas/candidate-profile';
 import { DEFAULT_ROLE_CONTEXT, roleContextSchema } from '../../schemas/role-context';
-import { CV_PATH_TRUST_ENV } from '../../server/cv-path-guard';
+import { CV_TRUST_CONTEXT_KEY, grantCvPathTrust } from '../../server/cv-path-guard';
 import { ingestInputSchema, ingestOutputSchema } from '../interview-state';
 import {
   buildRoleContext,
@@ -345,15 +345,50 @@ function fakeProfileStore(): CandidateProfileStore {
   };
 }
 
-describe('the ingest step progress cue', () => {
-  // The trust override is scoped to this suite: leaking it would silently disable the
-  // CV path-confinement guard for every later test in the worker.
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+describe('the ingest step CV-path trust boundary', () => {
+  it('confines a client-supplied CV path when the request context carries no process trust', async () => {
+    const step = createIngestStep({
+      readCv: async () => 'CV text for ada@example.com',
+      extractorFor: () => async () => cannedProfile,
+      roleBuilderFor: () => async () => roleContextSchema.parse({ role: 'Staff Engineer' }),
+      memory: fakeProfileStore(),
+    });
+    const workflow = createWorkflow({
+      id: 'ingestTrustTest',
+      inputSchema: ingestInputSchema,
+      outputSchema: ingestOutputSchema,
+    })
+      .then(step)
+      .commit();
+    const mastra = new Mastra({
+      workflows: { ingestTrustTest: workflow },
+      storage: new LibSQLStore({ id: 'ingest-trust-test', url: ':memory:' }),
+    });
 
+    // No grantCvPathTrust: this is what an HTTP-started run looks like, whatever the
+    // caller put into its own request context or the server's environment.
+    const requestContext = new RequestContext();
+    requestContext.set(CV_TRUST_CONTEXT_KEY, '1');
+
+    const run = await mastra.getWorkflow('ingestTrustTest').createRun();
+    const output = await run.start({
+      inputData: {
+        cvPath: '/tmp/ada-cv.txt',
+        postingText: 'We are hiring a staff engineer.',
+        researchUrls: [],
+        threadId: 'thread-ingest-trust',
+      },
+      requestContext,
+    });
+
+    expect(output.status).toBe('failed');
+    const error = (output as { error?: { message?: string } }).error;
+    expect(error?.message).toMatch(/outside the allowed upload directory/i);
+  });
+});
+
+describe('the ingest step progress cue', () => {
   it('emits a role-stage progress chunk into the run stream once the CV is parsed', async () => {
-    vi.stubEnv(CV_PATH_TRUST_ENV, '1');
     const step = createIngestStep({
       readCv: async () => 'CV text for ada@example.com',
       extractorFor: () => async () => cannedProfile,
@@ -372,6 +407,10 @@ describe('the ingest step progress cue', () => {
       storage: new LibSQLStore({ id: 'ingest-stream-test', url: ':memory:' }),
     });
 
+    // The CV path is outside any uploads dir, so run as the trusted CLI entrypoint.
+    const requestContext = new RequestContext();
+    grantCvPathTrust(requestContext);
+
     const run = await mastra.getWorkflow('ingestStreamTest').createRun();
     const output = run.stream({
       inputData: {
@@ -380,6 +419,7 @@ describe('the ingest step progress cue', () => {
         researchUrls: [],
         threadId: 'thread-ingest-stream',
       },
+      requestContext,
     });
 
     const chunks: unknown[] = [];
