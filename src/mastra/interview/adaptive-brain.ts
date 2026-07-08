@@ -22,6 +22,7 @@ import {
 } from '../structured-call';
 import type { TranscriptEntry } from '../schemas/interview';
 import type { RoleContext } from '../schemas/role-context';
+import { CLOSING_SYSTEM_PROMPT } from '../agents/interviewer';
 import { neutralizeFences } from '../prompt-safety';
 import {
   estimateTokens,
@@ -298,6 +299,48 @@ export function createInterviewerWriter(
       sink,
     });
 }
+
+/** Build the user message that asks the interviewer to close the finished session. */
+export function buildClosingPrompt(state: Pick<BrainState, 'transcript'>): string {
+  return (
+    'The interview is over.\n' +
+    'Here is the full interview between the <transcript> tags.\n' +
+    `<transcript>\n${neutralizeFences(renderTranscript(state.transcript))}\n</transcript>\n` +
+    'Say goodbye to the candidate.'
+  );
+}
+
+/** Speak the finished session's closing line via the interviewer agent. */
+export type ClosingWriter = (state: Pick<BrainState, 'transcript'>) => Promise<string>;
+
+/**
+ * Real closing writer: the interviewer agent streams the goodbye under the closing
+ * instructions override, so the wrap-up is written fresh for this session instead of
+ * phrased as another question. Token chunks are forwarded to `sink` like a question's.
+ */
+export function createClosingWriter(
+  agent: TextStreamer,
+  requestContext: RequestContext,
+  sink?: ChunkSink,
+): ClosingWriter {
+  return async (state) =>
+    streamingTextCall(agent, buildClosingPrompt(state), requestContext, {
+      description: 'closing',
+      sink,
+      instructions: CLOSING_SYSTEM_PROMPT,
+    });
+}
+
+/** Resolves the closing writer from the run's Mastra registry, mirroring the brain factory. */
+export type ClosingFactory = (
+  registry: BrainRegistry,
+  requestContext: RequestContext,
+  sink?: ChunkSink,
+) => ClosingWriter;
+
+/** Production closing: the interviewer agent on the fast tier, closing instructions swapped in. */
+export const agentClosingFactory: ClosingFactory = (registry, requestContext, sink) =>
+  createClosingWriter(registry.getAgent('interviewer'), requestContext, sink);
 
 /** Real assessor: run the assessor agent with structured output on the fast tier. */
 export function createAnswerAssessor(
