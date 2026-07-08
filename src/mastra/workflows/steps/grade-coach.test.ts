@@ -482,6 +482,8 @@ describe('coach step ledger degradation', () => {
       coach: { generate: async () => ({ object: coaching }) },
       memory: downMemory,
     });
+    // Structural-by-necessity double cast: the engine's full step context carries many
+    // runtime-only fields this step never reads; the fake covers exactly the four it does.
     const result = await step.execute({
       inputData,
       mastra: { getLogger: () => ({ warn }) },

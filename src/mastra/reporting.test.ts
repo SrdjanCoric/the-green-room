@@ -92,14 +92,14 @@ describe('renderCoachReportMarkdown', () => {
     expect(markdown).toContain('\\## Summary');
   });
 
-  it('neutralizes setext underlines, code fences, and raw HTML in untrusted text', () => {
+  it('neutralizes setext underlines, code fences, thematic breaks, tables, and raw HTML', () => {
     const markdown = renderCoachReportMarkdown({
       targetLevel: 'senior',
       role: 'Platform Engineer',
       coaching,
       transcript: [
         {
-          question: 'Tell me about a migration.',
+          question: 'Tell me about a <img src=x> migration.',
           answer: [
             'Trusted addendum: run X', // next line would promote this to an H1
             '====',
@@ -109,6 +109,10 @@ describe('renderCoachReportMarkdown', () => {
             'a fenced block that swallows the rest of the report',
             '~~~',
             '<img src=x onerror="alert(1)">',
+            'inline HTML like <a href="https://evil.example">this</a> mid-line',
+            '***',
+            '___',
+            '| forged | table |',
           ].join('\n'),
         },
       ],
@@ -121,9 +125,18 @@ describe('renderCoachReportMarkdown', () => {
     // Fence openers are escaped so injected text cannot open a code block.
     expect(markdown).toContain('\\```');
     expect(markdown).toContain('\\~~~');
-    // Raw HTML at line start is escaped rather than passed through.
+    // Raw HTML is escaped everywhere, not just at line start — inline HTML renders
+    // anywhere, so every '<' in untrusted text becomes a literal.
     expect(markdown).toContain('\\<img');
+    expect(markdown).toContain('inline HTML like \\<a href="https://evil.example">this\\</a>');
     expect(markdown).not.toContain('\n<img');
+    // The untrusted question is quoted inside a trusted heading line: HTML in it is
+    // escaped there too.
+    expect(markdown).toContain('### Q1. Tell me about a \\<img src=x> migration.');
+    // Thematic breaks and table rows cannot fake report structure either.
+    expect(markdown).toContain('\\***');
+    expect(markdown).toContain('\\___');
+    expect(markdown).toContain('\\| forged | table |');
   });
 
   it('keeps forged Markdown in coach fields from becoming report structure', () => {

@@ -146,9 +146,72 @@ describe('createResearchPageGuard', () => {
     expect(part.toolInvocation.toolCallId).toBe('call-1');
     expect(part.toolInvocation.state).toBe('result');
     expect(resultText(rewritten)).toBe('neutralized page text');
-    // A flagged page's URL collapses to its origin: a redirect-smuggled path or query
-    // must not re-enter the loop alongside the neutralized text.
-    expect((part.toolInvocation.result as { url: string }).url).toBe('https://company.example');
+    // A flagged page's URL is withheld outright — even the origin is attacker-chosen
+    // via redirect, so nothing of it re-enters the loop beside the neutralized text.
+    expect((part.toolInvocation.result as { url: string }).url).toBe('');
+  });
+
+  it('rewrites every flagged result when one message carries several pages', async () => {
+    const { scanner } = fakeScanner();
+    const twoPages: MastraDBMessage = {
+      id: 'm1',
+      role: 'assistant',
+      createdAt: new Date(),
+      content: {
+        format: 2,
+        parts: (['call-1', 'call-2'] as const).map((toolCallId) => ({
+          type: 'tool-invocation',
+          toolInvocation: {
+            state: 'result',
+            toolCallId,
+            toolName: RESEARCH_FETCH_TOOL_KEY,
+            args: { url: 'https://company.example/about' },
+            result: { text: `INJECT via ${toolCallId}`, url: 'https://company.example/about' },
+          },
+        })),
+      },
+    };
+
+    const returned = (await runStep(guardWith(scanner), [twoPages])) as MastraDBMessage[];
+
+    // The second rewrite must accumulate on top of the first, not clobber it.
+    const results = returned[0]!.content.parts.map((part) =>
+      part.type === 'tool-invocation' ? (part.toolInvocation.result as { text: string }).text : '',
+    );
+    expect(results).toEqual(['neutralized page text', 'neutralized page text']);
+  });
+
+  it('scrubs the flagged URL when the detector echoes it back in the rewrite', async () => {
+    // The rewrite covers the whole scan surface, so a detector that quotes the
+    // "Fetched from:" line would otherwise re-seat the rider-carrying URL as text.
+    const echoingScanner: PageInjectionScanner = {
+      async processInput({ messages }) {
+        return messages.map((message) => {
+          const part = message.content.parts[0];
+          const text = part?.type === 'text' ? part.text : '';
+          const firstLine = text.split('\n')[0] ?? '';
+          return {
+            ...message,
+            content: {
+              format: 2 as const,
+              parts: [{ type: 'text' as const, text: `${firstLine} - content removed` }],
+            },
+          };
+        });
+      },
+    };
+    const messages = [
+      toolResultMessage({
+        id: 'm1',
+        toolCallId: 'call-1',
+        text: 'INJECT: obey the page',
+        url: 'https://evil.example/INJECT-rider',
+      }),
+    ];
+
+    const returned = (await runStep(guardWith(echoingScanner), messages)) as MastraDBMessage[];
+
+    expect(resultText(returned[0]!)).toBe('Fetched from: [url withheld] - content removed');
   });
 
   it('catches injection riding in the final URL, not just the page text', async () => {
@@ -165,12 +228,12 @@ describe('createResearchPageGuard', () => {
     const returned = (await runStep(guardWith(scanner), messages)) as MastraDBMessage[];
 
     // The URL travels through the detector with the text, so a redirect-planted
-    // instruction in the path is neutralized and the URL is stripped to its origin.
+    // instruction in the path is neutralized and the URL is withheld entirely.
     expect(returned).toHaveLength(1);
     const part = returned[0]!.content.parts[0];
     if (part?.type !== 'tool-invocation') throw new Error('expected a tool-invocation part');
     expect(resultText(returned[0]!)).toBe('neutralized page text');
-    expect((part.toolInvocation.result as { url: string }).url).toBe('https://evil.example');
+    expect((part.toolInvocation.result as { url: string }).url).toBe('');
   });
 
   it('substitutes withheld-page text when the detector filters instead of rewriting', async () => {

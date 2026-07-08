@@ -32,23 +32,26 @@ function sanitizeFilenamePart(value: string): string {
 // The coach speaks about an untrusted transcript, so its free-text is untrusted too: a
 // prompt-injected answer can push the model to emit Markdown that forges trusted-looking
 // report structure (headings, block quotes, lists). Collapse a value that renders on a
-// heading line onto a single line, so no embedded newline can open a new block.
+// heading line onto a single line, so no embedded newline can open a new block, and
+// escape raw HTML — inline HTML renders anywhere, headings included.
 function inlineText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
+  return value.replace(/\s+/g, ' ').replace(/</g, '\\<').trim();
 }
 
-// Neutralize a multi-line prose block by escaping a leading Markdown structural token on
-// each line — ATX headings, block quotes, lists, setext underlines (a `===`/`---` line
-// promotes the line above it to a heading), code-fence openers, and raw HTML — so
-// injected text can never forge trusted-looking report structure while the prose still
-// reads normally.
+// Neutralize a multi-line prose block: escape every '<' (inline HTML renders anywhere
+// in a line, not just at its start) and each line's leading Markdown structural token —
+// ATX headings, block quotes, lists, table pipes, code-fence openers, plus full-line
+// setext underlines (a `===`/`---` line promotes the line above it to a heading) and
+// thematic breaks — so injected text can never forge trusted-looking report structure
+// while the prose still reads normally (`\<`, `\-`, `\|` all render as the literal).
 function neutralizeMarkdown(text: string): string {
   return text
     .split('\n')
     .map((line) =>
       line
-        .replace(/^(\s*)([#>]|[-*+](?=\s)|\d+\.(?=\s)|`{3,}|~{3,}|<)/, '$1\\$2')
-        .replace(/^(\s*)(=+|-+)(\s*)$/, '$1\\$2$3'),
+        .replace(/</g, '\\<')
+        .replace(/^(\s*)([#>|]|[-*+](?=\s)|\d+\.(?=\s)|`{3,}|~{3,})/, '$1\\$2')
+        .replace(/^(\s*)(=+|-+|[*_](?:\s*[*_]){2,})(\s*)$/, '$1\\$2$3'),
     )
     .join('\n');
 }

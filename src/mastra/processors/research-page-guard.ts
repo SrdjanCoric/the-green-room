@@ -60,7 +60,6 @@ export function createResearchPageGuard(options: ResearchPageGuardOptions): Inpu
           jobs.push({ messageIndex, page });
         }
       });
-      args.state[SCANNED_STATE_KEY] = [...scanned];
       if (jobs.length === 0) return undefined;
 
       // Pages are independent, so they scan concurrently — one detector call each,
@@ -68,6 +67,10 @@ export function createResearchPageGuard(options: ResearchPageGuardOptions): Inpu
       const verdicts = await Promise.all(
         jobs.map(({ page }) => scanPage(detector, page, args.abort)),
       );
+      // Commit the scanned ids only after every verdict is in: an abort mid-scan
+      // leaves the batch unmarked, so the next step scans it again instead of
+      // waving it through.
+      args.state[SCANNED_STATE_KEY] = [...scanned];
 
       let changed = false;
       const nextMessages = [...args.messages];
@@ -77,8 +80,11 @@ export function createResearchPageGuard(options: ResearchPageGuardOptions): Inpu
         nextMessages[messageIndex] = withSafeResult(
           nextMessages[messageIndex]!,
           page.toolCallId,
-          verdict.text,
-          safeOrigin(page.url),
+          withheldUrl(verdict.text, page.url),
+          // A flagged page's URL is withheld outright — even its origin is
+          // attacker-chosen via redirect, and it buys nothing on a page the
+          // detector already judged malicious.
+          page.url === undefined ? undefined : '',
         );
         changed = true;
       });
@@ -131,14 +137,14 @@ function pageScanInput(page: ResearchPage): string {
   return page.url === undefined ? page.text : `Fetched from: ${page.url}\n\n${page.text}`;
 }
 
-/** Collapse a flagged page's URL to its origin, so nothing rider-shaped survives in it. */
-function safeOrigin(url: string | undefined): string | undefined {
-  if (url === undefined) return undefined;
-  try {
-    return new URL(url).origin;
-  } catch {
-    return '';
-  }
+/**
+ * Scrub the flagged page's URL out of the detector's rewrite before it is seated: the
+ * rewrite covers the whole scan surface, so the "Fetched from:" line (full URL, riders
+ * and all) can survive it verbatim — withholding the `url` field alone is not enough.
+ */
+function withheldUrl(verdictText: string, url: string | undefined): string {
+  if (url === undefined) return verdictText;
+  return verdictText.split(url).join('[url withheld]');
 }
 
 /**
@@ -146,6 +152,11 @@ function safeOrigin(url: string | undefined): string | undefined {
  * message because the built-in detector reads and rewrites text parts only; a verdict
  * that differs from the input is carried back and re-seated in the tool result by the
  * caller (a clean page keeps its original text and URL untouched).
+ *
+ * Inherited trade-off: the built-in detector fails open on an internal detection
+ * fault (it returns the message unchanged), which the equality check below cannot
+ * distinguish from a genuinely clean page. Detection fidelity is deliberately
+ * delegated to Mastra rather than re-implemented here.
  */
 async function scanPage(
   detector: PageInjectionScanner,
