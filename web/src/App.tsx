@@ -37,7 +37,12 @@ export interface AppProps {
 
 export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
   const store = storage ?? window.localStorage;
-  const interviewClient = useMemo(() => client ?? createMastraInterviewClient(), [client]);
+  // The production client shares the injected storage, so its run bookkeeping and
+  // the hook's session snapshots always live (and are cleared) in the same place.
+  const interviewClient = useMemo(
+    () => client ?? createMastraInterviewClient(undefined, store),
+    [client, store],
+  );
 
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
   const [history, setHistory] = useState<RunHistoryEntry[]>(() => loadHistory(store));
@@ -111,9 +116,17 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     [patchHistory],
   );
 
+  // Every rejoin — playbill click, page load, or the hook's own online-event
+  // recovery — makes the run live again, so a later reload still finds it rejoinable.
+  const handleReconnected = useCallback(
+    (runId: string) => patchHistory(runId, { status: 'live' }),
+    [patchHistory],
+  );
+
   const interview = useInterview(interviewClient, {
     onCompleted: handleCompleted,
     onFailed: handleFailed,
+    onReconnected: handleReconnected,
     storage: store,
   });
 
@@ -202,8 +215,7 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
   }
 
   function rejoin(runId: string) {
-    // The retried run is live again until it settles otherwise.
-    patchHistory(runId, { status: 'live' });
+    // reconnect() reports back through onReconnected, which marks the run live.
     interview.reconnect(runId);
     navigate({ name: 'interview', runId });
   }

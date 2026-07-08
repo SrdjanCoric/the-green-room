@@ -398,10 +398,15 @@ describe('App — reconnect resilience', () => {
     const gateA = new Promise<void>((resolve) => {
       releaseA = resolve;
     });
+    let runAClosed = false;
     async function* runAEvents(): AsyncGenerator<InterviewEvent> {
-      yield { type: 'suspended', suspend: { kind: 'question', question: 'Proudest work?', questionNumber: 1 } };
-      await gateA;
-      yield { type: 'completed', report };
+      try {
+        yield { type: 'suspended', suspend: { kind: 'question', question: 'Proudest work?', questionNumber: 1 } };
+        await gateA;
+        yield { type: 'completed', report };
+      } finally {
+        runAClosed = true;
+      }
     }
     async function* runBEvents(): AsyncGenerator<InterviewEvent> {
       yield {
@@ -432,6 +437,8 @@ describe('App — reconnect resilience', () => {
     expect(screen.queryByText(/strong, concrete material/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/★ closed/i)).not.toBeInTheDocument();
     expect(window.localStorage.getItem('green-room:report:run-b')).toBeNull();
+    // And A's superseded stream was closed eagerly, not left running behind B.
+    expect(runAClosed).toBe(true);
   });
 
   it('rejoins the run when its stream drops mid-session, without a reload', async () => {
@@ -500,9 +507,12 @@ describe('App — reconnect resilience', () => {
     expect(await screen.findByText(/still offline/i)).toBeInTheDocument();
     expect(screen.getByText(/went dark/i)).toBeInTheDocument();
 
-    // The connection returns: the run rejoins by itself.
+    // The connection returns: the run rejoins by itself and is live again in the
+    // playbill — a later reload must find it rejoinable, not written off.
     window.dispatchEvent(new Event('online'));
     expect(await screen.findByText('Back on the air?')).toBeInTheDocument();
+    expect(screen.getByText(/now playing/i)).toBeInTheDocument();
+    expect(screen.queryByText(/went dark/i)).not.toBeInTheDocument();
   });
 
   it('reopens a failed run from the playbill by attempting the reconnect again', async () => {

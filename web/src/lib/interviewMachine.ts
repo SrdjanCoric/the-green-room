@@ -90,10 +90,18 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
     // by the observed stream's replay, so hydrating partial text is safe either way.
     // A cold reconnect (snapshot lost) still works — the stream and the run's
     // persisted state carry the current turn; only past turns' display is gone.
-    case 'RECONNECT':
-      return action.snapshot
-        ? { ...action.snapshot, runId: action.runId }
-        : { ...initialInterviewState, phase: 'starting', runId: action.runId, cue: 'Reconnecting…' };
+    // A snapshot saved in the error phase rehydrates as a reconnect in progress:
+    // re-rendering the stale error would hide the very rejoin the user asked for.
+    case 'RECONNECT': {
+      if (!action.snapshot) {
+        return { ...initialInterviewState, phase: 'starting', runId: action.runId, cue: 'Reconnecting…' };
+      }
+      const snapshot = { ...action.snapshot, runId: action.runId };
+      if (snapshot.phase === 'error') {
+        return { ...snapshot, phase: 'starting', error: null, cue: 'Reconnecting…' };
+      }
+      return snapshot;
+    }
 
     case 'SUBMIT_ANSWER':
       return {
