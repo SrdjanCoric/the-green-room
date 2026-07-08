@@ -61,6 +61,43 @@ describe('streamToEvents', () => {
     ]);
   });
 
+  it('drops no chunks when idle polls interleave a slow stream', async () => {
+    // Real runs go quiet for seconds while a model call works, then burst. Every idle
+    // poll races the stream read — a chunk that resolves a raced-out read must still
+    // be delivered, not dropped on the floor.
+    async function* slowChunks(): AsyncGenerator<StreamChunk> {
+      yield { from: 'WORKFLOW', type: 'workflow-step-start', payload: { currentStep: { id: 'ingest' } } };
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      yield {
+        from: 'USER',
+        type: 'workflow-step-output',
+        payload: { output: { type: 'ingest-progress', stage: 'role' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      yield { from: 'WORKFLOW', type: 'workflow-step-start', payload: { currentStep: { id: 'research' } } };
+    }
+    const outcome: WorkflowOutcome = {
+      status: 'suspended',
+      suspendPayload: { kind: 'level', prompt: 'What level?' },
+    };
+    // Not terminal while the stream is alive; the suspend lands only after it closes.
+    let closed = false;
+    const source = (async function* () {
+      yield* slowChunks();
+      closed = true;
+    })();
+    const fetchOutcome = async () => (closed ? outcome : undefined);
+
+    const events = await collect(streamToEvents(source, fetchOutcome, 10));
+
+    expect(events).toEqual([
+      { type: 'cue', label: 'Reading your CV' },
+      { type: 'cue', label: 'Sizing up the role' },
+      { type: 'cue', label: 'Researching the company' },
+      { type: 'suspended', suspend: { kind: 'level', prompt: 'What level?' } },
+    ]);
+  });
+
   it('settles from the authoritative outcome even when the stream never closes', async () => {
     // A resume stream that emits a token then hangs open (no `done`) — the idle
     // watchdog must still detect the suspend from the run's persisted state.

@@ -36,6 +36,12 @@ export async function* streamToEvents(
   const iterator = chunks[Symbol.asyncIterator]();
   let terminal: WorkflowOutcome | undefined;
 
+  // One in-flight read survives across idle races. A fresh `iterator.next()` per
+  // race would leak the raced-out read: its promise still resolves with a real chunk
+  // later, but nothing would await it — every model-call silence would then swallow
+  // the chunks that follow it (live tokens, progress cues) on the floor.
+  let pendingRead: Promise<IteratorResult<StreamChunk>> | null = null;
+
   for (;;) {
     let timer: ReturnType<typeof setTimeout>;
     const idle = new Promise<typeof IDLE>((resolve) => {
@@ -44,7 +50,8 @@ export async function* streamToEvents(
 
     let raced: IteratorResult<StreamChunk> | typeof IDLE;
     try {
-      raced = await Promise.race([iterator.next(), idle]);
+      pendingRead ??= iterator.next();
+      raced = await Promise.race([pendingRead, idle]);
     } finally {
       clearTimeout(timer!);
     }
@@ -55,9 +62,10 @@ export async function* streamToEvents(
         terminal = outcome;
         break;
       }
-      continue; // Not terminal yet — keep waiting for chunks.
+      continue; // Not terminal yet — the pending read stays armed for the next chunk.
     }
 
+    pendingRead = null;
     if (raced.done) break;
     const event = interpreter.next(raced.value);
     if (event) yield event;
