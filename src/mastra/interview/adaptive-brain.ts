@@ -14,10 +14,11 @@ import {
   type DirectorDecision,
 } from '../schemas/director-decision';
 import {
+  streamingTextCall,
   structuredCall,
-  textCall,
+  type ChunkSink,
   type StructuredGenerator,
-  type TextGenerator,
+  type TextStreamer,
 } from '../structured-call';
 import type { TranscriptEntry } from '../schemas/interview';
 import type { RoleContext } from '../schemas/role-context';
@@ -281,14 +282,20 @@ export function createDirectorDecider(
     });
 }
 
-/** Real interviewer writer: run the interviewer agent on the fast tier and trim its text. */
+/**
+ * Real interviewer writer: stream the interviewer agent on the fast tier and trim its
+ * text. Token chunks are forwarded to `sink` (the workflow step's `writer`) so the
+ * question types out live in a client watching the run stream.
+ */
 export function createInterviewerWriter(
-  agent: TextGenerator,
+  agent: TextStreamer,
   requestContext: RequestContext,
+  sink?: ChunkSink,
 ): InterviewerWriter {
   return async (state, decision) =>
-    textCall(agent, buildInterviewerPrompt(state, decision), requestContext, {
+    streamingTextCall(agent, buildInterviewerPrompt(state, decision), requestContext, {
       description: 'interviewer',
+      sink,
     });
 }
 
@@ -315,12 +322,16 @@ export interface BrainRegistry {
   getAgent(id: string): Agent;
 }
 
-export type BrainFactory = (registry: BrainRegistry, requestContext: RequestContext) => AdaptiveBrain;
+export type BrainFactory = (
+  registry: BrainRegistry,
+  requestContext: RequestContext,
+  sink?: ChunkSink,
+) => AdaptiveBrain;
 
 /** Production brain: director on smart, interviewer and assessor on fast. */
-export const agentBrainFactory: BrainFactory = (registry, requestContext) => ({
+export const agentBrainFactory: BrainFactory = (registry, requestContext, sink) => ({
   decide: createDirectorDecider(registry.getAgent('director'), requestContext),
-  question: createInterviewerWriter(registry.getAgent('interviewer'), requestContext),
+  question: createInterviewerWriter(registry.getAgent('interviewer'), requestContext, sink),
   assess: createAnswerAssessor(registry.getAgent('assessor'), requestContext),
 });
 

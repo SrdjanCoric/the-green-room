@@ -43,6 +43,15 @@ describe('interviewReducer', () => {
     expect(state.cue).toBeNull();
   });
 
+  it('drops a failed attempt’s partial text when a retried reply starts over', () => {
+    let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'question-delta', text: 'Walk me thr' } });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'question-start' } });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'question-delta', text: 'Walk me through it.' } });
+
+    expect(state.currentQuestion).toBe('Walk me through it.');
+  });
+
   it('settles on the authoritative question text when the run suspends', () => {
     let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
     state = interviewReducer(state, { type: 'EVENT', event: { type: 'question-delta', text: 'partial' } });

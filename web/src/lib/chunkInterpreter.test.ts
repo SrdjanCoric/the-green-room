@@ -49,6 +49,33 @@ describe('createChunkInterpreter', () => {
     expect(interp.next(textDelta('internal'))).toBeNull();
   });
 
+  it('unwraps agent tokens forwarded through a workflow-step-output envelope', () => {
+    const interp = createChunkInterpreter();
+    interp.next(workflowStep('interviewTurn'));
+
+    const enveloped: StreamChunk = {
+      from: 'USER',
+      type: 'workflow-step-output',
+      payload: {
+        output: { from: 'AGENT', type: 'text-delta', payload: { text: 'Walk me ' } },
+        stepName: 'interviewTurn',
+      },
+    };
+    expect(interp.next(enveloped)).toEqual({ type: 'question-delta', text: 'Walk me ' });
+  });
+
+  it('signals a question restart when a new reply opens mid-turn', () => {
+    const interp = createChunkInterpreter();
+    interp.next(workflowStep('interviewTurn'));
+
+    expect(interp.next({ from: 'AGENT', type: 'text-start', payload: {} })).toEqual({
+      type: 'question-start',
+    });
+    // Outside a token-bearing step, a text-start carries no UI signal.
+    interp.next(workflowStep('research'));
+    expect(interp.next({ from: 'AGENT', type: 'text-start', payload: {} })).toBeNull();
+  });
+
   it('ignores chunks it does not recognise', () => {
     const interp = createChunkInterpreter();
 

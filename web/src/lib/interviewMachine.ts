@@ -101,6 +101,11 @@ function applyEvent(state: InterviewState, event: InterviewEvent): InterviewStat
     case 'cue':
       return { ...state, cue: event.label };
 
+    case 'question-start':
+      // A retried interviewer attempt streams the question again from the top;
+      // drop the failed attempt's partial text rather than appending to it.
+      return { ...state, currentQuestion: '' };
+
     case 'question-delta':
       return {
         ...state,
@@ -108,6 +113,9 @@ function applyEvent(state: InterviewState, event: InterviewEvent): InterviewStat
         currentQuestion: state.currentQuestion + event.text,
         cue: null,
       };
+
+    case 'report-start':
+      return { ...state, reportPreview: '' };
 
     case 'report-delta':
       return {

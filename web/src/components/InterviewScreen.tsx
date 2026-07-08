@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { InterviewState } from '../lib/interviewMachine';
 
@@ -39,8 +39,7 @@ export function InterviewScreen({ state, onSubmitAnswer, onSubmitLevel }: Interv
           <div className="line q">
             <div className="char">The Interviewer</div>
             <div className="say">
-              {state.currentQuestion}
-              {streaming && <span className="caret" />}
+              <TypewrittenQuestion text={state.currentQuestion} />
             </div>
           </div>
         )}
@@ -74,16 +73,7 @@ export function InterviewScreen({ state, onSubmitAnswer, onSubmitLevel }: Interv
         />
       )}
 
-      {awaitingLevel && (
-        <CueCard
-          key="level"
-          label="Target level"
-          placeholder="e.g. senior, staff, principal"
-          tip="The seniority bar the interview should calibrate to."
-          singleLine
-          onDeliver={onSubmitLevel}
-        />
-      )}
+      {awaitingLevel && <LevelPicker onPick={onSubmitLevel} />}
     </>
   );
 }
@@ -95,6 +85,47 @@ function sceneMeta(state: InterviewState): string {
   return parts.join(' · ');
 }
 
+/** Reveal pace for the question: 2 characters every 24ms (~80 chars a second). */
+const TYPE_CHARS = 2;
+const TYPE_INTERVAL_MS = 24;
+
+/**
+ * Type the current question out at a steady pace instead of stamping it. The model's
+ * stream arrives in coarse chunks — and the authoritative suspend delivers the full
+ * text at once — so a fixed reveal rate is what makes the question feel delivered;
+ * the reveal trails whatever text has actually arrived and catches up to it.
+ */
+function TypewrittenQuestion({ text }: { text: string }) {
+  const [count, setCount] = useState(0);
+  // One interval lives for the whole question (the component unmounts between
+  // questions). It reads the latest text through a ref so a burst of arriving
+  // deltas never resets the pacing timer; a caught-up tick is a no-op state set,
+  // which React bails out of re-rendering.
+  const textRef = useRef(text);
+  useEffect(() => {
+    textRef.current = text;
+  }, [text]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCount((current) =>
+        current >= textRef.current.length
+          ? current
+          : Math.min(current + TYPE_CHARS, textRef.current.length),
+      );
+    }, TYPE_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  const shown = Math.min(count, text.length);
+  return (
+    <>
+      {text.slice(0, shown)}
+      {shown < text.length && <span className="caret" />}
+    </>
+  );
+}
+
 function Line({ who, kind, text }: { who: string; kind: 'q' | 'a'; text: string }) {
   return (
     <div className={`line ${kind}`}>
@@ -104,15 +135,50 @@ function Line({ who, kind, text }: { who: string; kind: 'q' | 'a'; text: string 
   );
 }
 
+/** The seniority levels offered when the run suspends to ask for one. */
+const LEVELS = ['junior', 'mid-level', 'senior', 'staff'];
+
+function LevelPicker({ onPick }: { onPick: (level: string) => void }) {
+  const [selected, setSelected] = useState<string | null>(null);
+
+  return (
+    <div className="cuecard">
+      <div className="levels" role="group" aria-label="Target level">
+        {LEVELS.map((level) => (
+          <button
+            key={level}
+            className={`level-chip${selected === level ? ' selected' : ''}`}
+            type="button"
+            aria-pressed={selected === level}
+            onClick={() => setSelected(level)}
+          >
+            {level}
+          </button>
+        ))}
+      </div>
+      <div className="row">
+        <span className="tip">The seniority bar the interview should calibrate to.</span>
+        <button
+          className="deliver"
+          type="button"
+          disabled={!selected}
+          onClick={() => selected && onPick(selected)}
+        >
+          Deliver ▸
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface CueCardProps {
   label: string;
   placeholder: string;
   tip: string;
-  singleLine?: boolean;
   onDeliver: (value: string) => void;
 }
 
-function CueCard({ label, placeholder, tip, singleLine = false, onDeliver }: CueCardProps) {
+function CueCard({ label, placeholder, tip, onDeliver }: CueCardProps) {
   const [value, setValue] = useState('');
 
   function deliver() {
@@ -125,28 +191,12 @@ function CueCard({ label, placeholder, tip, singleLine = false, onDeliver }: Cue
   return (
     <div className="cuecard">
       <div className="frame">
-        {singleLine ? (
-          <input
-            type="text"
-            aria-label={label}
-            placeholder={placeholder}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                deliver();
-              }
-            }}
-          />
-        ) : (
-          <textarea
-            aria-label={label}
-            placeholder={placeholder}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-          />
-        )}
+        <textarea
+          aria-label={label}
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
       </div>
       <div className="row">
         <span className="tip">{tip}</span>

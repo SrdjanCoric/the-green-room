@@ -752,6 +752,35 @@ details.ens summary .h {
   opacity: 0.5;
   cursor: default;
 }
+.cuecard .levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.level-chip {
+  font-family: var(--wood);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--cream);
+  border: 1px solid var(--brass-dim);
+  padding: 11px 22px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: 0.18s;
+}
+.level-chip:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+  box-shadow: 0 0 20px rgba(229, 184, 92, 0.25);
+}
+.level-chip.selected {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: #2a0a0d;
+}
 
 /* report — director's notes */
 .tabs {
