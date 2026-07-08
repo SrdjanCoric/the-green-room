@@ -49,7 +49,7 @@ coaching report.
 | `--fast-model <id>` | no    | Model id for the fast tier (CV/role parsers, interviewer, research).    |
 | `--smart-model <id>`| no    | Model id for the smart tier (director, grader, coach).                  |
 | `--candidate <id>`  | no    | Stable candidate id; keys resource-scoped working memory across sessions. |
-| `--max-questions <n>` | no  | Ceiling on questions asked in the session (default: 6). A ceiling, not a target — the director wraps up as soon as it has enough signal. |
+| `--max-questions <n>` | no  | Ceiling on questions asked in the session (default: 20). A ceiling, not a target — the director wraps up as soon as it has enough signal. |
 
 ## Resuming an interview
 

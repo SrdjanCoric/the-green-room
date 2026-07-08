@@ -16,6 +16,8 @@ import type {
  */
 export interface WorkflowOutcome {
   status?: string;
+  /** Snapshot write time (server metadata) — lets a poll spot pre-resume state. */
+  updatedAt?: string | Date;
   suspendPayload?: unknown;
   steps?: Record<string, { status?: string; suspendPayload?: unknown } | undefined>;
   result?: unknown;
@@ -96,7 +98,10 @@ function findSuspendedStepPayload(
   steps: WorkflowOutcome['steps'],
 ): Record<string, unknown> | undefined {
   for (const step of Object.values(steps ?? {})) {
-    const payload = asRecord(step?.suspendPayload);
+    // A completed step keeps its old suspendPayload in the run state, so only a step
+    // that is currently suspended can speak for the run.
+    if (step?.status !== 'suspended') continue;
+    const payload = asRecord(step.suspendPayload);
     if (payload && typeof payload.kind === 'string') return payload;
   }
   return undefined;

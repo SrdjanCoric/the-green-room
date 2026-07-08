@@ -29,7 +29,7 @@ describe('streamToEvents', () => {
     const events = await collect(streamToEvents(fromArray(chunks), async () => outcome));
 
     expect(events).toEqual([
-      { type: 'cue', label: 'Writing the question…' },
+      { type: 'cue', label: 'Loading the next question…' },
       { type: 'question-delta', text: 'Walk me through it.' },
       {
         type: 'suspended',
@@ -39,9 +39,26 @@ describe('streamToEvents', () => {
   });
 
   it('yields a failure when the run ends without a readable outcome', async () => {
-    const events = await collect(streamToEvents(fromArray([]), async () => undefined));
+    const events = await collect(streamToEvents(fromArray([]), async () => undefined, 5));
 
     expect(events).toEqual([{ type: 'failed', message: expect.stringMatching(/ended/i) }]);
+  });
+
+  it('re-polls after the stream closes so a snapshot write that lags the close still settles', async () => {
+    // An abnormal close can beat the run's next persist: the first authoritative
+    // read comes back empty, but the run is healthy and its state lands shortly after.
+    const outcome: WorkflowOutcome = {
+      status: 'suspended',
+      suspendPayload: { kind: 'question', question: 'Late but fine?', questionNumber: 2 },
+    };
+    let reads = 0;
+    const fetchOutcome = async () => (reads++ < 2 ? undefined : outcome);
+
+    const events = await collect(streamToEvents(fromArray([]), fetchOutcome, 5));
+
+    expect(events).toEqual([
+      { type: 'suspended', suspend: { kind: 'question', question: 'Late but fine?', questionNumber: 2 } },
+    ]);
   });
 
   it('settles from the authoritative outcome even when the stream never closes', async () => {
@@ -59,7 +76,7 @@ describe('streamToEvents', () => {
     const events = await collect(streamToEvents(neverEnds(), async () => outcome, 10));
 
     expect(events).toEqual([
-      { type: 'cue', label: 'Writing the question…' },
+      { type: 'cue', label: 'Loading the next question…' },
       { type: 'suspended', suspend: { kind: 'question', question: 'Next question?', questionNumber: 2 } },
     ]);
   });

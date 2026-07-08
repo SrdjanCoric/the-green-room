@@ -44,7 +44,7 @@ export const collectLevelStep = createStep({
     if (!level) {
       return await suspend({
         kind: 'level',
-        prompt: 'What seniority level should this interview target? (e.g. junior, senior, staff)',
+        prompt: 'What seniority level should this interview target?',
       });
     }
 
@@ -101,8 +101,10 @@ export function createInterviewTurnStep(makeBrain: BrainFactory) {
     outputSchema: interviewStateSchema,
     suspendSchema: turnSuspendSchema,
     resumeSchema: turnResumeSchema,
-    execute: async ({ inputData, resumeData, suspend, suspendData, mastra, requestContext }) => {
-      const brain = makeBrain(mastra, requestContext);
+    execute: async ({ inputData, resumeData, suspend, suspendData, mastra, requestContext, writer }) => {
+      // The step's writer forwards the interviewer's token chunks into the run stream,
+      // so a client watching over SSE sees the question typed out live.
+      const brain = makeBrain(mastra, requestContext, writer);
 
       /** Record an answered turn, assess it, and advance the loop state. */
       const completeTurn = async (turn: AnsweredTurn) => {

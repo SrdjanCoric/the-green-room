@@ -55,9 +55,13 @@ export const coverageStateSchema = z.object({
 
 export type CoverageState = z.infer<typeof coverageStateSchema>;
 
-/** A reasonable default budget for a single short behavioral session. */
+/**
+ * Default budget for a full behavioral session. The question ceiling is deliberately
+ * generous — the director ends the interview when the signal is sufficient, so the
+ * cap is a runaway backstop, not the expected session length.
+ */
 export const DEFAULT_CAP_LIMITS: CapLimits = capLimitsSchema.parse({
-  maxQuestions: 6,
+  maxQuestions: 20,
   maxConsecutiveFollowUps: 2,
   maxReprompts: 1,
   tokenBudget: 40_000,

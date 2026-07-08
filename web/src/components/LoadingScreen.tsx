@@ -17,7 +17,7 @@ export interface LoadingScreenProps {
  */
 export function LoadingScreen({ cue }: LoadingScreenProps) {
   const activeIndex = STAGE_CUES.findIndex((c) => c.label === cue);
-  // A cue past the three setup stages (e.g. "Writing the question…") means all are done.
+  // A cue past the three setup stages (e.g. "Loading the next question…") means all are done.
   const passedSetup = cue !== null && activeIndex === -1;
 
   return (

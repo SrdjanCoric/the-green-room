@@ -27,6 +27,19 @@ const limits = capLimitsSchema.parse({
   tokenBudget: 1_000_000,
 });
 
+/** A fake interviewer agent whose stream replies with `text` as one delta chunk. */
+function streamerOf(text: string) {
+  return {
+    stream: async () => ({
+      fullStream: (async function* () {
+        yield { type: 'text-delta', payload: { text } };
+        yield { type: 'finish' };
+      })(),
+      text: Promise.resolve(text),
+    }),
+  };
+}
+
 function state(overrides: Partial<BrainState> = {}): BrainState {
   return {
     profile: candidateProfileSchema.parse({ name: 'Ada Lovelace', headline: 'Staff Engineer' }),
@@ -270,15 +283,31 @@ describe('the agent-backed brain callables', () => {
   });
 
   it('trims the interviewer question and rejects an empty one', async () => {
-    const write = createInterviewerWriter({ generate: async () => ({ text: '  What led up to that?  ' }) }, requestContext);
+    const write = createInterviewerWriter(streamerOf('  What led up to that?  '), requestContext);
     expect(await write(state(), directorDecisionSchema.parse({ action: 'new_topic', subject: 't' }))).toBe(
       'What led up to that?',
     );
 
-    const writeEmpty = createInterviewerWriter({ generate: async () => ({ text: '   ' }) }, requestContext);
+    const writeEmpty = createInterviewerWriter(streamerOf('   '), requestContext);
     await expect(
       writeEmpty(state(), directorDecisionSchema.parse({ action: 'new_topic', subject: 't' })),
     ).rejects.toThrow(/interviewer/i);
+  });
+
+  it('forwards the interviewer token chunks to the sink while streaming', async () => {
+    const written: unknown[] = [];
+    const write = createInterviewerWriter(streamerOf('What led up to that?'), requestContext, {
+      write: async (chunk) => {
+        written.push(chunk);
+      },
+    });
+
+    await write(state(), directorDecisionSchema.parse({ action: 'new_topic', subject: 't' }));
+
+    expect(written).toEqual([
+      { type: 'text-start', payload: {} },
+      { type: 'text-delta', payload: { text: 'What led up to that?' } },
+    ]);
   });
 
   it('asks the assessor for structured output against the assessment schema', async () => {

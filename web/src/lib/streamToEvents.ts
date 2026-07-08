@@ -5,6 +5,14 @@ import type { InterviewEvent } from './types';
 /** Default silence, in ms, after which the run's persisted state is polled. */
 const DEFAULT_IDLE_MS = 1500;
 
+/**
+ * Extra polls (spaced `idleMs` apart) after the stream ends before giving up. An
+ * abnormal stream close can beat the run's next snapshot write — the run is healthy,
+ * its state just hasn't landed yet — so one immediate read is not enough evidence
+ * to declare the run over without a result.
+ */
+const FINAL_POLL_ATTEMPTS = 8;
+
 const IDLE = Symbol('idle');
 
 /**
@@ -55,6 +63,14 @@ export async function* streamToEvents(
     if (event) yield event;
   }
 
-  const outcome = readOutcome(terminal ?? (await fetchOutcome()));
+  let outcome = readOutcome(terminal ?? (await fetchOutcome()));
+  for (let attempt = 0; !outcome && attempt < FINAL_POLL_ATTEMPTS; attempt++) {
+    await delay(idleMs);
+    outcome = readOutcome(await fetchOutcome());
+  }
   yield outcome ?? { type: 'failed', message: 'The interview run ended without a result.' };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
