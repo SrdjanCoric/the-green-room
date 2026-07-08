@@ -19,9 +19,13 @@ export type OnCompleted = (report: InterviewReport, runId: string) => void;
 /** Fired when a run settles as failed — the hard kind, not a retryable turn failure. */
 export type OnFailed = (runId: string) => void;
 
+/** Fired whenever a run is rejoined (playbill click, page load, restored connection). */
+export type OnReconnected = (runId: string) => void;
+
 export interface UseInterviewOptions {
   onCompleted?: OnCompleted;
   onFailed?: OnFailed;
+  onReconnected?: OnReconnected;
   storage?: Storage;
 }
 
@@ -51,7 +55,7 @@ export interface UseInterview {
  */
 export function useInterview(
   client: InterviewClient,
-  { onCompleted, onFailed, storage = window.localStorage }: UseInterviewOptions = {},
+  { onCompleted, onFailed, onReconnected, storage = window.localStorage }: UseInterviewOptions = {},
 ): UseInterview {
   const [state, dispatch] = useReducer(interviewReducer, initialInterviewState);
   const runIdRef = useRef<string | null>(null);
@@ -59,13 +63,18 @@ export function useInterview(
   // superseded generation must stop dispatching, or two runs' events would
   // interleave into one reducer (and a stale completion could credit the wrong run).
   const generationRef = useRef(0);
+  // The current generation's event iterator, so superseding it can close the old
+  // stream (and its idle polling) eagerly instead of waiting for its next event.
+  const activeIteratorRef = useRef<AsyncIterator<InterviewEvent> | null>(null);
   // Latest-callback refs so consuming the stream never closes over stale handlers.
   const onCompletedRef = useRef(onCompleted);
   const onFailedRef = useRef(onFailed);
+  const onReconnectedRef = useRef(onReconnected);
   useEffect(() => {
     onCompletedRef.current = onCompleted;
     onFailedRef.current = onFailed;
-  }, [onCompleted, onFailed]);
+    onReconnectedRef.current = onReconnected;
+  }, [onCompleted, onFailed, onReconnected]);
 
   // Keep the run's session snapshot in step with the live state so a reload can
   // restore the settled transcript before rejoining the stream. Persisting only at
@@ -96,8 +105,12 @@ export function useInterview(
       runId: string,
       canRejoin: boolean,
     ) => {
+      const iterator = events[Symbol.asyncIterator]();
+      activeIteratorRef.current = iterator;
       try {
-        for await (const event of events) {
+        for (;;) {
+          const { done, value: event } = await iterator.next();
+          if (done) return;
           if (generationRef.current !== generation) return;
           dispatch({ type: 'EVENT', event });
           if (event.type === 'completed') onCompletedRef.current?.(event.report, runId);
@@ -119,32 +132,46 @@ export function useInterview(
           event: { type: 'failed', message: error instanceof Error ? error.message : String(error) },
         });
         onFailedRef.current?.(runId);
+      } finally {
+        if (activeIteratorRef.current === iterator) activeIteratorRef.current = null;
+        // Manual iteration skips for-await's implicit cleanup, so close the source
+        // explicitly (a no-op when it already finished or failed).
+        void iterator.return?.(undefined).catch?.(() => {});
       }
     },
     [client],
   );
 
+  // Take over stream consumption: supersede the previous generation and close its
+  // stream now, so its SSE connection and idle polling stop with it.
+  const beginGeneration = useCallback((): number => {
+    const generation = ++generationRef.current;
+    void activeIteratorRef.current?.return?.(undefined);
+    return generation;
+  }, []);
+
   const start = useCallback(
     (input: StartInterviewInput) => {
       const { runId, events } = client.start(input);
       runIdRef.current = runId;
-      const generation = ++generationRef.current;
+      const generation = beginGeneration();
       dispatch({ type: 'START', runId });
       void consume(events, generation, runId, true);
     },
-    [client, consume],
+    [client, consume, beginGeneration],
   );
 
   const reconnect = useCallback(
     (runId: string) => {
       runIdRef.current = runId;
-      const generation = ++generationRef.current;
+      const generation = beginGeneration();
       dispatch({ type: 'RECONNECT', runId, snapshot: loadSession(storage, runId) });
+      onReconnectedRef.current?.(runId);
       // The observe stream is itself the rejoin, so a failure here settles as an
       // error; the online listener (or the playbill) retries it.
       void consume(client.observe(runId), generation, runId, false);
     },
-    [client, consume, storage],
+    [client, consume, storage, beginGeneration],
   );
 
   // A run that died on a dead connection rejoins by itself when the connection

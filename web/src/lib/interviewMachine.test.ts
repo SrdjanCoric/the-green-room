@@ -218,6 +218,29 @@ describe('interviewReducer', () => {
     expect(state.cue).toMatch(/reconnect/i);
   });
 
+  it('rehydrates an error-phase snapshot into a reconnecting state, keeping the transcript', () => {
+    // The persist effect also saves at the error transition; rejoining must show
+    // the reconnect in progress, not re-render the stale error screen.
+    const snapshot = {
+      ...initialInterviewState,
+      phase: 'error' as const,
+      runId: 'run-1',
+      transcript: [{ question: 'Q1?', answer: 'A1.' }],
+      error: 'network dropped',
+    };
+
+    const state = interviewReducer(initialInterviewState, {
+      type: 'RECONNECT',
+      runId: 'run-1',
+      snapshot,
+    });
+
+    expect(state.phase).toBe('starting');
+    expect(state.error).toBeNull();
+    expect(state.cue).toMatch(/reconnect/i);
+    expect(state.transcript).toEqual([{ question: 'Q1?', answer: 'A1.' }]);
+  });
+
   it('trusts the run id it reconnected with over a stale snapshot field', () => {
     const snapshot = { ...initialInterviewState, phase: 'grading' as const, runId: 'other-run' };
 
