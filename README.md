@@ -110,21 +110,22 @@ npm run cli -- reports
 
 ## Coaching knowledge
 
-The coach retrieves from a local knowledge index at `data/knowledge.db`: notes on answer craft,
-chunked and embedded with OpenAI `text-embedding-3-small`. When the coach writes advice, it pulls
-the most relevant guidance for each weak answer and grounds the fix in it. Queries embed with the
-same model, which is why coached advice needs `OPENAI_API_KEY`.
+The coach retrieves from the knowledge index that ships with the app at `data/knowledge.db`:
+notes on answer craft, chunked and embedded with OpenAI `text-embedding-3-small`. When the coach
+writes advice, it pulls the most relevant guidance for each weak answer and grounds the fix in
+it. There is nothing to build before the first run. Queries embed with the same model at
+runtime, which is why coached advice needs `OPENAI_API_KEY` (the interview itself runs without
+it).
 
-Build the index before your first coached run:
+To ground the coach in your own notes instead, point `KNOWLEDGE_CORPUS_DIR` at a directory of
+markdown files and run:
 
 ```bash
 npm run ingest
 ```
 
-`ingest` also requires `OPENAI_API_KEY` (the index and its queries must use the same embedding
-model). It indexes the sample guidance committed at `knowledge/samples/`, so it works out of the
-box. To ground the coach in your own notes instead, point `KNOWLEDGE_CORPUS_DIR` at a directory
-of markdown files and re-run `npm run ingest`; the rebuild replaces the sample index.
+`ingest` embeds your documents with the same OpenAI model (so it needs `OPENAI_API_KEY` too) and
+replaces the shipped index with one built from your corpus.
 
 ## Studio
 
@@ -151,4 +152,5 @@ npm run typecheck
 npm run lint
 ```
 
-Workflow snapshots, memory, traces, uploads, and reports persist under `./data/` (gitignored).
+Workflow snapshots, memory, traces, uploads, and reports persist under `./data/` and stay out
+of git; the shipped knowledge index (`data/knowledge.db`) is the one committed file there.
