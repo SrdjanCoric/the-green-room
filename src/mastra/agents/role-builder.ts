@@ -25,6 +25,8 @@ Take the company name and role title only from the posting; never invent anythin
 export const roleBuilderAgent = new Agent({
   id: 'roleBuilder',
   name: 'Role Builder',
+  description:
+    'Derives weighted role competencies and level expectations from the job posting.',
   instructions: ROLE_CONTEXT_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'fast'),
 });

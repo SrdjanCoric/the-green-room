@@ -5,35 +5,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  collectAnswer,
   describeDriveFailure,
   driveInterview,
   loadLastRun,
   saveLastRun,
+  type DriveResult,
 } from './interview-session';
-
-describe('collectAnswer', () => {
-  it('joins lines until the /done sentinel and trims the result', async () => {
-    const lines = ['First line.', 'Second line.', '/done', 'ignored after done'];
-    let i = 0;
-    const answer = await collectAnswer(async () => (i < lines.length ? lines[i++] : null));
-
-    expect(answer).toBe('First line.\nSecond line.');
-  });
-
-  it('stops at end of input even without a sentinel', async () => {
-    const lines = ['Only line.'];
-    let i = 0;
-    const answer = await collectAnswer(async () => (i < lines.length ? lines[i++] : null));
-
-    expect(answer).toBe('Only line.');
-  });
-
-  it('returns an empty string when the answer is blank', async () => {
-    const answer = await collectAnswer(async () => '/done');
-    expect(answer).toBe('');
-  });
-});
 
 describe('last-run persistence', () => {
   let dir: string;
@@ -47,13 +24,13 @@ describe('last-run persistence', () => {
 
   it('round-trips the latest run pointer through a file', async () => {
     const path = join(dir, 'nested', 'last-run.json');
-    await saveLastRun({ runId: 'run-123', resourceId: 'cand-1', threadId: 'sess-1' }, path);
+    await saveLastRun({ runId: 'run-123', threadId: 'sess-1' }, path);
 
     const loaded = await loadLastRun(path);
-    expect(loaded).toEqual({ runId: 'run-123', resourceId: 'cand-1', threadId: 'sess-1' });
+    expect(loaded).toEqual({ runId: 'run-123', threadId: 'sess-1' });
 
     // The file is real JSON on disk, not an in-memory shim.
-    const raw = JSON.parse(await readFile(path, 'utf8'));
+    const raw = JSON.parse(await readFile(path, 'utf8')) as { runId: string };
     expect(raw.runId).toBe('run-123');
   });
 
@@ -65,20 +42,24 @@ describe('last-run persistence', () => {
 describe('driveInterview', () => {
   it('answers the level prompt then every question until the run succeeds', async () => {
     // A scripted suspend/resume sequence standing in for the workflow run.
-    const script = [
+    const script: DriveResult[] = [
       { status: 'suspended', suspendPayload: { collectLevel: { kind: 'level', prompt: 'Level?' } } },
       {
         status: 'suspended',
-        suspendPayload: { interviewTurn: { kind: 'question', question: 'Q1', questionNumber: 1 } },
+        suspendPayload: {
+          interviewTurn: { kind: 'question', question: 'Q1', questionNumber: 1, action: 'new_topic' },
+        },
       },
       {
         status: 'suspended',
-        suspendPayload: { interviewTurn: { kind: 'question', question: 'Q2', questionNumber: 2 } },
+        suspendPayload: {
+          interviewTurn: { kind: 'question', question: 'Q2', questionNumber: 2, action: 'follow_up' },
+        },
       },
       { status: 'success', result: { transcript: [] } },
     ];
     let cursor = 0;
-    const resume = vi.fn(async () => script[++cursor]);
+    const resume = vi.fn(async () => script[++cursor]!);
 
     const onLevel = vi.fn(async () => 'senior');
     const seenQuestions: string[] = [];
@@ -87,7 +68,7 @@ describe('driveInterview', () => {
       return `answer to ${question}`;
     });
 
-    const final = await driveInterview({ initial: script[0], resume, onLevel, onQuestion });
+    const final = await driveInterview({ initial: script[0]!, resume, onLevel, onQuestion });
 
     expect(final.status).toBe('success');
     expect(onLevel).toHaveBeenCalledWith('Level?');
@@ -129,5 +110,22 @@ describe('describeDriveFailure', () => {
       describeDriveFailure({ status: 'failed', error: { message: 'unsupported file type' } }),
     ).toMatch(/unsupported/i);
     expect(describeDriveFailure({ status: 'canceled' })).toMatch(/canceled/i);
+  });
+
+  it('renders a failure suspension as a paused turn pointing at the resume command', () => {
+    const message = describeDriveFailure({
+      status: 'suspended',
+      suspendPayload: {
+        interviewTurn: {
+          kind: 'failure',
+          reason: 'The assessor call failed.',
+          stage: 'assessor',
+        },
+      },
+    });
+
+    expect(message).toContain('The assessor call failed.');
+    expect(message).toMatch(/answers saved/i);
+    expect(message).toMatch(/resume command/i);
   });
 });

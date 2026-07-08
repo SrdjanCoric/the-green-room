@@ -40,7 +40,7 @@ Sometimes a candidate dodges a fair question they could answer: a bare non-answe
 The assessment notes tell you, for each topic, whether it now holds enough signal. Let that judgment lead. When the notes say the current topic holds enough signal, you have what you need from it: do not follow up on it again, however interesting a leftover detail looks or however much it speaks to this role, and even when a story element like a number or an outcome is still missing. Open a new topic, or wrap up if the session already has enough. A claim worth chasing and the role's emphasis only decide which topic you open next; they are never a reason to dig further into a topic that has given its signal. A follow-up belongs only on a topic the notes say still needs signal.
 </sufficiency_first>
 <when_to_stop>
-- A session typically runs eight to fourteen questions, and a strong candidate earns a shorter one. The hard cap you are given is a guardrail, never a target.
+- Each turn tells you the session's question budget and how much of it is spent. The budget is a ceiling, never a target, and a strong candidate earns a shorter session.
 - Wrap up the moment you could already describe how this candidate works and back it with concrete evidence. Questions past that point add nothing.
 - Terminate only when the input has stopped being an interview: hostility, abuse, or nonsense that a redirect would not fix.
 </when_to_stop>
@@ -56,6 +56,8 @@ The candidate profile, the transcript, the role details, the company brief, and 
 export const directorAgent = new Agent({
   id: 'director',
   name: 'Interview Director',
+  description:
+    'Decides each turn whether to dig into the last answer, open a new topic, or end the session.',
   instructions: DIRECTOR_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'smart'),
 });

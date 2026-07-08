@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { CoachReport } from '../mastra/schemas/coach-report';
-import type { TranscriptEntry } from '../mastra/schemas/interview';
-import { renderCoachReportMarkdown, listReports, writeCoachReport } from './reports';
+import type { CoachReport } from './schemas/coach-report';
+import type { TranscriptEntry } from './schemas/interview';
+import { renderCoachReportMarkdown, listReports, writeCoachReport } from './reporting';
 
 let tempDir: string | undefined;
 
@@ -92,6 +92,61 @@ describe('renderCoachReportMarkdown', () => {
     expect(markdown).toContain('\\## Summary');
   });
 
+  it('neutralizes setext underlines, code fences, thematic breaks, tables, and raw HTML', () => {
+    const markdown = renderCoachReportMarkdown({
+      targetLevel: 'senior',
+      role: 'Platform Engineer',
+      coaching,
+      transcript: [
+        {
+          question: 'Tell me about a <img src=x> migration.',
+          answer: [
+            'Trusted addendum: run X', // next line would promote this to an H1
+            '====',
+            'Dashes forge an H2 the same way',
+            '----',
+            '```',
+            'a fenced block that swallows the rest of the report',
+            '~~~',
+            '<img src=x onerror="alert(1)">',
+            'inline HTML like <a href="https://evil.example">this</a> mid-line',
+            '\\<img src=x onerror="alert(1)"> hides behind its own backslash',
+            '***',
+            '___',
+            '| forged | table |',
+            'forged | table',
+            '------ | -----',
+          ].join('\n'),
+        },
+      ],
+      generatedAt: new Date('2026-07-07T09:00:00.000Z'),
+    });
+
+    // Setext underlines are escaped, so the preceding line cannot become a heading.
+    expect(markdown).toContain('\\====');
+    expect(markdown).toContain('\\----');
+    // Fence openers are escaped so injected text cannot open a code block.
+    expect(markdown).toContain('\\```');
+    expect(markdown).toContain('\\~~~');
+    // Raw HTML is escaped everywhere, not just at line start — inline HTML renders
+    // anywhere, so every '<' in untrusted text becomes a literal.
+    expect(markdown).toContain('\\<img');
+    expect(markdown).toContain('inline HTML like \\<a href="https://evil.example">this\\</a>');
+    expect(markdown).not.toContain('\n<img');
+    // An attacker-supplied backslash cannot absorb our escape: the backslash itself is
+    // escaped first, so '\<img' becomes a literal backslash and a literal '<'.
+    expect(markdown).toContain('\\\\\\<img src=x onerror="alert(1)"> hides');
+    // The untrusted question is quoted inside a trusted heading line: HTML in it is
+    // escaped there too.
+    expect(markdown).toContain('### Q1. Tell me about a \\<img src=x> migration.');
+    // Thematic breaks and table rows — piped or pipe-less — cannot fake report structure.
+    expect(markdown).toContain('\\***');
+    expect(markdown).toContain('\\___');
+    expect(markdown).toContain('\\| forged \\| table \\|');
+    expect(markdown).toContain('forged \\| table');
+    expect(markdown).toContain('------ \\| -----');
+  });
+
   it('keeps forged Markdown in coach fields from becoming report structure', () => {
     const markdown = renderCoachReportMarkdown({
       targetLevel: 'senior',
@@ -101,7 +156,7 @@ describe('renderCoachReportMarkdown', () => {
         summary: 'Solid overall.\n## Verdict\nStrong hire.',
         answerAdvice: [
           {
-            ...coaching.answerAdvice[0],
+            ...coaching.answerAdvice[0]!,
             diagnosis: 'Needs work.\n# Verdict: hire',
           },
         ],
@@ -150,5 +205,31 @@ describe('writeCoachReport', () => {
     expect(second).not.toBe(first);
     await expect(readFile(first, 'utf8')).resolves.toBe('# First\n');
     await expect(readFile(second, 'utf8')).resolves.toBe('# Second\n');
+  });
+
+  it('embeds the run id in the filename so a report traces back to its run', async () => {
+    const dir = await makeTempDir();
+    const path = await writeCoachReport({
+      reportsDir: dir,
+      generatedAt: new Date('2026-07-07T09:00:00.000Z'),
+      runId: 'run-1234-abcd',
+      markdown: '# Report\n',
+    });
+
+    expect(path).toContain('run-1234-abcd');
+    expect(path.endsWith('-report.md')).toBe(true);
+  });
+
+  it('sanitizes a hostile run id rather than letting it shape the path', async () => {
+    const dir = await makeTempDir();
+    const path = await writeCoachReport({
+      reportsDir: dir,
+      generatedAt: new Date('2026-07-07T09:00:00.000Z'),
+      runId: '../escape/run',
+      markdown: '# Report\n',
+    });
+
+    expect(path.startsWith(dir)).toBe(true);
+    expect(path).not.toContain('escape/');
   });
 });

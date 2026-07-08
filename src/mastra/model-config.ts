@@ -53,10 +53,16 @@ function qualify(model: string, provider: string): string {
  * single run can mix providers across tiers.
  */
 export function resolveModelTiers(options: ModelTierOptions = {}): ModelTiers {
-  const provider = options.provider?.trim() || DEFAULT_PROVIDER;
-  const fast = qualify(options.fastModel?.trim() || DEFAULT_MODELS.fast, provider);
-  const smart = qualify(options.smartModel?.trim() || DEFAULT_MODELS.smart, provider);
+  const provider = trimmedOrDefault(options.provider, DEFAULT_PROVIDER);
+  const fast = qualify(trimmedOrDefault(options.fastModel, DEFAULT_MODELS.fast), provider);
+  const smart = qualify(trimmedOrDefault(options.smartModel, DEFAULT_MODELS.smart), provider);
   return { provider, fast, smart };
+}
+
+/** Unset, empty, and whitespace-only values all fall back to the default. */
+function trimmedOrDefault(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed !== undefined && trimmed !== '' ? trimmed : fallback;
 }
 
 /** Build a request context carrying the resolved tiers for a workflow run. */

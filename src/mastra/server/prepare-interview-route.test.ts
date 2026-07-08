@@ -85,7 +85,7 @@ describe('prepare-interview route handler', () => {
     await handler(c);
 
     expect(captured().status).toBe(400);
-    expect(captured().data).toMatchObject({ error: expect.stringMatching(/CV/i) });
+    expect(captured().data).toMatchObject({ error: expect.stringMatching(/CV/i) as unknown });
   });
 
   it('rejects an unsupported CV type with the validation message', async () => {
@@ -98,7 +98,9 @@ describe('prepare-interview route handler', () => {
     await handler(c);
 
     expect(captured().status).toBe(400);
-    expect(captured().data).toMatchObject({ error: expect.stringMatching(/Unsupported CV/i) });
+    expect(captured().data).toMatchObject({
+      error: expect.stringMatching(/Unsupported CV/i) as unknown,
+    });
   });
 
   it('rejects an over-cap Content-Length before buffering the body', async () => {

@@ -1,8 +1,15 @@
 import { readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 
+import { truncate } from './safe-fetch';
+
 /** File extensions read directly as UTF-8 text. */
-const TEXT_EXTENSIONS = new Set(['.txt', '.md', '.markdown', '.text']);
+export const TEXT_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.txt',
+  '.md',
+  '.markdown',
+  '.text',
+]);
 
 /**
  * Default upper bound on the CV file size, checked before the file is read. A CV
@@ -41,7 +48,7 @@ export async function extractCvText(filePath: string, options: ExtractCvOptions 
   const maxChars = options.maxChars ?? MAX_CV_CHARS;
   const extension = extname(filePath).toLowerCase();
 
-  if (extension !== '.pdf' && !TEXT_EXTENSIONS.has(extension)) {
+  if (extension !== '.pdf' && !TEXT_FILE_EXTENSIONS.has(extension)) {
     throw new Error(
       `Unsupported CV file type "${extension || '(none)'}". Provide a .pdf, .txt, or .md file.`,
     );
@@ -54,16 +61,6 @@ export async function extractCvText(filePath: string, options: ExtractCvOptions 
 
   const text = extension === '.pdf' ? await extractPdfText(filePath) : await readTextFile(filePath);
   return truncate(text, maxChars);
-}
-
-/** Truncate to a character cap without leaving a split surrogate pair at the boundary. */
-function truncate(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  const sliced = text.slice(0, maxChars);
-  const lastCode = sliced.charCodeAt(sliced.length - 1);
-  // A lone high surrogate (0xD800–0xDBFF) at the end means we split an astral
-  // character; drop it so the result stays valid UTF-16.
-  return lastCode >= 0xd800 && lastCode <= 0xdbff ? sliced.slice(0, -1) : sliced;
 }
 
 async function readTextFile(filePath: string): Promise<string> {

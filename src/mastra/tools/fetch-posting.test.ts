@@ -1,28 +1,23 @@
+import type { fetch as undiciFetch } from 'undici';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  UnsafePostingUrlError,
-  fetchPostingText,
-  isGlobalIp,
-  resolveSafeTarget,
-  workableApiUrl,
-  type FetchPostingOptions,
-} from './fetch-posting';
+import { fetchPostingText, type FetchPostingOptions } from './fetch-posting';
+import { UnsafePostingUrlError } from './safe-fetch';
 
 /** A lookup that always resolves to one global address. */
 const globalLookup = async () => ['93.184.216.34'];
 
 /** A fetch that must never be called — proves the SSRF guard short-circuits before any request. */
-const forbiddenFetch: typeof fetch = () => {
+const forbiddenFetch: typeof undiciFetch = () => {
   throw new Error('fetch should not have been called');
 };
 
 /** Build a fetch that returns a canned Response for each URL it sees, in order per URL. */
-function fetchReturning(handler: (url: string) => Response): typeof fetch {
+function fetchReturning(handler: (url: string) => Response): typeof undiciFetch {
   return (async (input: string | URL | Request) => {
-    const url = typeof input === 'string' ? input : input.toString();
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     return handler(url);
-  }) as typeof fetch;
+  }) as unknown as typeof undiciFetch;
 }
 
 function html(body: string): Response {
@@ -46,50 +41,6 @@ const LD_JSON_PAGE = `<html><head>
   description: '<p>Build and run our <b>platform</b>.</p><ul><li>On-call rotation</li></ul>',
 })}</script>
 </head><body><p>ignored chrome</p></body></html>`;
-
-describe('isGlobalIp', () => {
-  it('rejects loopback, private, link-local, and IPv6 local ranges', () => {
-    for (const ip of [
-      '127.0.0.1',
-      '10.0.0.1',
-      '172.16.5.4',
-      '192.168.1.1',
-      '169.254.169.254',
-      '100.64.0.1',
-      '::1',
-      'fe80::1',
-      'fc00::1',
-      'fd12:3456::1',
-    ]) {
-      expect(isGlobalIp(ip)).toBe(false);
-    }
-  });
-
-  it('rejects IPv4-mapped / embedded IPv6 forms that hide a private or loopback v4', () => {
-    for (const ip of [
-      '::ffff:7f00:1', // hex-form ::ffff:127.0.0.1 (loopback)
-      '::ffff:a9fe:a9fe', // hex-form ::ffff:169.254.169.254 (metadata)
-      '::ffff:0a00:0001', // hex-form ::ffff:10.0.0.1 (private)
-      '0:0:0:0:0:ffff:10.0.0.1', // expanded IPv4-mapped
-      '::ffff:192.168.1.1', // dotted IPv4-mapped
-      '64:ff9b::a00:1', // NAT64 embedding 10.0.0.1
-      '2002:7f00:1::', // 6to4 embedding 127.0.0.1
-      '2002:a9fe:a9fe::', // 6to4 embedding 169.254.169.254
-    ]) {
-      expect(isGlobalIp(ip)).toBe(false);
-    }
-  });
-
-  it('still accepts a 6to4 address that embeds a global v4', () => {
-    expect(isGlobalIp('2002:5db8:d822::')).toBe(true); // 6to4 of 93.184.216.34
-  });
-
-  it('accepts publicly-routable addresses', () => {
-    expect(isGlobalIp('93.184.216.34')).toBe(true);
-    expect(isGlobalIp('8.8.8.8')).toBe(true);
-    expect(isGlobalIp('2606:2800:220:1::1')).toBe(true);
-  });
-});
 
 describe('fetchPostingText — SSRF guard', () => {
   const base: FetchPostingOptions = { fetchImpl: forbiddenFetch, lookup: globalLookup };
@@ -147,27 +98,6 @@ describe('fetchPostingText — SSRF guard', () => {
 
     await expect(
       fetchPostingText('https://jobs.example.com/role', { fetchImpl, lookup: globalLookup }),
-    ).rejects.toBeInstanceOf(UnsafePostingUrlError);
-  });
-});
-
-describe('resolveSafeTarget', () => {
-  it('pins a hostname to its first validated global address', async () => {
-    const target = await resolveSafeTarget('https://jobs.example.com/role', async () => [
-      '93.184.216.34',
-      '8.8.8.8',
-    ]);
-    expect(target.pinnedAddress).toBe('93.184.216.34');
-  });
-
-  it('does not pin an IP literal (nothing to re-resolve)', async () => {
-    const target = await resolveSafeTarget('http://93.184.216.34/role', globalLookup);
-    expect(target.pinnedAddress).toBeNull();
-  });
-
-  it('rejects a hostname resolving to a private address before any fetch', async () => {
-    await expect(
-      resolveSafeTarget('https://internal.example.com/role', async () => ['10.0.0.1']),
     ).rejects.toBeInstanceOf(UnsafePostingUrlError);
   });
 });
@@ -252,28 +182,6 @@ describe('fetchPostingText — extraction', () => {
   });
 });
 
-describe('workableApiUrl', () => {
-  it('maps an apply.workable.com posting URL to the public widget endpoint', () => {
-    const target = workableApiUrl('https://apply.workable.com/acme/j/ABC123/');
-    expect(target).toEqual({
-      apiUrl: 'https://apply.workable.com/api/v1/widget/accounts/acme?details=true',
-      shortcode: 'ABC123',
-    });
-  });
-
-  it('maps a subdomain board URL to the same account endpoint', () => {
-    const target = workableApiUrl('https://acme.workable.com/jobs/XYZ789');
-    expect(target?.apiUrl).toBe(
-      'https://apply.workable.com/api/v1/widget/accounts/acme?details=true',
-    );
-    expect(target?.shortcode).toBe('XYZ789');
-  });
-
-  it('returns null for a non-Workable URL', () => {
-    expect(workableApiUrl('https://boards.greenhouse.io/acme/jobs/123')).toBeNull();
-  });
-});
-
 describe('fetchPostingText — Workable special case', () => {
   it('hits the widget JSON API and selects the job matching the shortcode', async () => {
     const fetchSpy = vi.fn(
@@ -294,7 +202,7 @@ describe('fetchPostingText — Workable special case', () => {
     );
 
     const result = await fetchPostingText('https://apply.workable.com/acme/j/ABC123/', {
-      fetchImpl: fetchSpy as unknown as typeof fetch,
+      fetchImpl: fetchSpy as unknown as typeof undiciFetch,
       lookup: globalLookup,
     });
 

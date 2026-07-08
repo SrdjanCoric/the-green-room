@@ -19,7 +19,7 @@ describe('candidateProfileSchema', () => {
     });
 
     expect(parsed.name).toBe('Ada Lovelace');
-    expect(parsed.roles[0].title).toBe('Staff Engineer');
+    expect(parsed.roles[0]!.title).toBe('Staff Engineer');
     expect(parsed.technologies).toContain('Rust');
   });
 

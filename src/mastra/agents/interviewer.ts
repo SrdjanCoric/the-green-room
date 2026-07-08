@@ -72,6 +72,7 @@ ${STYLE_EXAMPLES_BLOCK}
 export const interviewerAgent = new Agent({
   id: 'interviewer',
   name: 'Interviewer',
+  description: "Phrases the director's decision as the next interview question, in the house voice.",
   instructions: INTERVIEWER_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'fast'),
 });

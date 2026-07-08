@@ -1,6 +1,7 @@
 import { mkdir, open, readdir, stat } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 
+import { dataDir } from './data-dir';
 import type { CoachReport } from './schemas/coach-report';
 import type { TranscriptEntry } from './schemas/interview';
 
@@ -18,8 +19,10 @@ export interface ReportListing {
   modifiedAt: Date;
 }
 
+/** Reports live beside the database under the project-root `data/` directory, so the
+ *  CLI and `mastra dev` write and list the same reports from any working directory. */
 export function defaultReportsDir(): string {
-  return join(process.cwd(), 'data', 'reports');
+  return join(dataDir, 'reports');
 }
 
 function sanitizeFilenamePart(value: string): string {
@@ -29,18 +32,32 @@ function sanitizeFilenamePart(value: string): string {
 // The coach speaks about an untrusted transcript, so its free-text is untrusted too: a
 // prompt-injected answer can push the model to emit Markdown that forges trusted-looking
 // report structure (headings, block quotes, lists). Collapse a value that renders on a
-// heading line onto a single line, so no embedded newline can open a new block.
+// heading line onto a single line, so no embedded newline can open a new block, and
+// escape raw HTML — inline HTML renders anywhere, headings included.
 function inlineText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
+  return value.replace(/\s+/g, ' ').replace(/\\/g, '\\\\').replace(/</g, '\\<').trim();
 }
 
-// Neutralize a multi-line prose block by escaping a leading Markdown structural token on
-// each line, so injected text can never forge a heading, block quote, or list while the
-// prose still reads normally.
+// Neutralize a multi-line prose block. Backslashes are escaped first — otherwise an
+// attacker-supplied `\` in front of a token absorbs our escape (`\\<img>` renders a
+// literal backslash and live HTML). Then every '<' (inline HTML renders anywhere in a
+// line) and every '|' (GFM tables need no leading pipe, only a delimiter row) become
+// literals, and each line's leading Markdown structural token — ATX headings, block
+// quotes, lists, code-fence openers, plus full-line setext underlines (a `===`/`---`
+// line promotes the line above it to a heading) and thematic breaks — is escaped, so
+// injected text can never forge trusted-looking report structure while the prose still
+// reads normally (`\<`, `\-`, `\|` all render as the literal character).
 function neutralizeMarkdown(text: string): string {
   return text
     .split('\n')
-    .map((line) => line.replace(/^(\s*)([#>]|[-*+](?=\s)|\d+\.(?=\s))/, '$1\\$2'))
+    .map((line) =>
+      line
+        .replace(/\\/g, '\\\\')
+        .replace(/</g, '\\<')
+        .replace(/\|/g, '\\|')
+        .replace(/^(\s*)([#>]|[-*+](?=\s)|\d+\.(?=\s)|`{3,}|~{3,})/, '$1\\$2')
+        .replace(/^(\s*)(=+|-+|[*_](?:\s*[*_]){2,})(\s*)$/, '$1\\$2$3'),
+    )
     .join('\n');
 }
 
@@ -106,11 +123,15 @@ export async function writeCoachReport(params: {
   markdown: string;
   reportsDir?: string;
   generatedAt?: Date;
+  /** The workflow run that produced this report; embedded in the filename so a report traces to its run. */
+  runId?: string;
 }): Promise<string> {
   const reportsDir = params.reportsDir ?? defaultReportsDir();
   const generatedAt = params.generatedAt ?? new Date();
   await mkdir(reportsDir, { recursive: true });
-  const filename = `${sanitizeFilenamePart(generatedAt.toISOString())}-report.md`;
+  const stamp = sanitizeFilenamePart(generatedAt.toISOString());
+  const runPart = params.runId ? `-${sanitizeFilenamePart(params.runId)}` : '';
+  const filename = `${stamp}${runPart}-report.md`;
   const extension = extname(filename);
   const stem = filename.slice(0, -extension.length);
   for (let counter = 1; ; counter += 1) {

@@ -67,6 +67,15 @@ export const DEFAULT_CAP_LIMITS: CapLimits = capLimitsSchema.parse({
 export const INITIAL_COVERAGE: CoverageState = coverageStateSchema.parse({});
 
 /**
+ * Build a limits override that raises only the question cap, for callers (the CLI's
+ * `--max-questions`) that expose a single knob. No override means "use the defaults".
+ */
+export function limitsWithMaxQuestions(maxQuestions: number | undefined): CapLimits | undefined {
+  if (maxQuestions === undefined) return undefined;
+  return capLimitsSchema.parse({ ...DEFAULT_CAP_LIMITS, maxQuestions });
+}
+
+/**
  * A cheap, dependency-free token estimate (~4 characters per token). Good enough to
  * enforce the coarse token-budget cap without pulling in a tokenizer; the exact model
  * accounting lives in observability, not here.

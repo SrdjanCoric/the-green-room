@@ -120,7 +120,7 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
         cvPath: prepared.cvPath,
         postingText: prepared.postingText,
         researchUrls: prepared.researchUrls,
-        resourceId: candidateId(store),
+        candidate: candidateId(store),
         threadId: crypto.randomUUID(),
         ensemble: payload.ensemble,
       };
@@ -191,6 +191,18 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
       if (interview.state.phase === 'starting') return <LoadingScreen cue={interview.state.cue} />;
       if (interview.state.phase === 'error') {
         return <p className="ferr">{interview.state.error}</p>;
+      }
+      if (interview.state.phase === 'turnFailed') {
+        // The run is alive and suspended on a failed turn — offer the retry the
+        // workflow is waiting for instead of a dead end.
+        return (
+          <div>
+            <p className="ferr">{interview.state.error}</p>
+            <button className="deliver" type="button" onClick={interview.retry}>
+              Retry the turn
+            </button>
+          </div>
+        );
       }
       return (
         <InterviewScreen

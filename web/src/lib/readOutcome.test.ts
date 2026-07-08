@@ -35,6 +35,27 @@ describe('readOutcome', () => {
     });
   });
 
+  it('reads a failure suspend so a failed turn is terminal for polling and retryable', () => {
+    const event = readOutcome({
+      status: 'suspended',
+      suspendPayload: {
+        interviewLoop: {
+          kind: 'failure',
+          reason: 'The director call failed; run the resume command to retry this turn.',
+          stage: 'director',
+        },
+      },
+    });
+
+    expect(event).toEqual({
+      type: 'suspended',
+      suspend: {
+        kind: 'failure',
+        reason: 'The director call failed; run the resume command to retry this turn.',
+      },
+    });
+  });
+
   it('reads a level suspend from a suspended step (runById state shape)', () => {
     const event = readOutcome({
       status: 'suspended',

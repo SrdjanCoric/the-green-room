@@ -13,11 +13,11 @@ import {
   createDirectorDecider,
   createInterviewerWriter,
   decideNextMove,
-  neutralizeFences,
   renderAssessments,
   renderDirective,
   type BrainState,
 } from './adaptive-brain';
+import { neutralizeFences } from '../prompt-safety';
 import { capLimitsSchema, coverageStateSchema } from './interview-caps';
 
 const limits = capLimitsSchema.parse({
@@ -200,6 +200,15 @@ describe('buildDirectorPrompt', () => {
     expect(withoutNudge).toContain('Distributed systems (5)');
   });
 
+  it('frames the question budget from the configured limits, as a ceiling rather than a target', () => {
+    const prompt = buildDirectorPrompt(state());
+
+    // Derived from CapLimits, so the prompt and the config can never drift apart.
+    expect(prompt).toContain('budget of 10 questions');
+    expect(prompt).toContain('a ceiling, never a target');
+    expect(prompt).toContain('wrap up as soon as the signal is sufficient');
+  });
+
   it('feeds the full cap state each turn, including the reprompt count and cap', () => {
     const prompt = buildDirectorPrompt(
       state({ coverage: coverageStateSchema.parse({ questionCount: 4, repromptCount: 1 }) }),
@@ -243,11 +252,21 @@ describe('the agent-backed brain callables', () => {
     expect(decision.action).toBe('wrap_up');
   });
 
-  it('throws when the director returns no structured decision', async () => {
-    const decide = createDirectorDecider({ generate: async () => ({ object: undefined }) }, requestContext);
-    await expect(decide(state(), { followUpsExhausted: false, repromptsExhausted: false })).rejects.toThrow(
-      /no structured decision/i,
+  it('retries a director reply with no structured decision before giving up', async () => {
+    let calls = 0;
+    const decide = createDirectorDecider(
+      {
+        generate: async () => {
+          calls += 1;
+          return { object: undefined };
+        },
+      },
+      requestContext,
     );
+    await expect(decide(state(), { followUpsExhausted: false, repromptsExhausted: false })).rejects.toThrow(
+      /director/i,
+    );
+    expect(calls).toBe(3);
   });
 
   it('trims the interviewer question and rejects an empty one', async () => {
@@ -259,7 +278,7 @@ describe('the agent-backed brain callables', () => {
     const writeEmpty = createInterviewerWriter({ generate: async () => ({ text: '   ' }) }, requestContext);
     await expect(
       writeEmpty(state(), directorDecisionSchema.parse({ action: 'new_topic', subject: 't' })),
-    ).rejects.toThrow(/empty question/i);
+    ).rejects.toThrow(/interviewer/i);
   });
 
   it('asks the assessor for structured output against the assessment schema', async () => {

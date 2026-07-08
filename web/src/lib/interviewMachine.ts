@@ -15,6 +15,8 @@ export type InterviewPhase =
   | 'assessing'
   | 'grading'
   | 'report'
+  /** A turn failed but the run is alive and suspended — retryable, unlike `error`. */
+  | 'turnFailed'
   | 'error';
 
 export interface InterviewState {
@@ -55,6 +57,7 @@ export type InterviewAction =
   | { type: 'EVENT'; event: InterviewEvent }
   | { type: 'SUBMIT_ANSWER'; answer: string }
   | { type: 'SUBMIT_LEVEL' }
+  | { type: 'RETRY' }
   | { type: 'RESET' };
 
 /** Pure transition function for a single interview run. */
@@ -78,6 +81,9 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
 
     case 'SUBMIT_LEVEL':
       return { ...state, phase: 'starting', levelPrompt: null, cue: 'Setting the stage…' };
+
+    case 'RETRY':
+      return { ...state, phase: 'assessing', error: null, cue: 'Retrying the turn…' };
 
     case 'RESET':
       return initialInterviewState;
@@ -114,6 +120,9 @@ function applyEvent(state: InterviewState, event: InterviewEvent): InterviewStat
     case 'suspended':
       if (event.suspend.kind === 'level') {
         return { ...state, phase: 'awaitingLevel', levelPrompt: event.suspend.prompt, cue: null };
+      }
+      if (event.suspend.kind === 'failure') {
+        return { ...state, phase: 'turnFailed', error: event.suspend.reason, cue: null };
       }
       return {
         ...state,

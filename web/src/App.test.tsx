@@ -76,6 +76,43 @@ describe('App — full interview flow', () => {
     expect(screen.getByText(/★ closed/i)).toBeInTheDocument();
   });
 
+  it('surfaces a failed turn with a retry that resumes the run with { retry: true }', async () => {
+    async function* failingResume(): AsyncGenerator<InterviewEvent> {
+      yield { type: 'suspended', suspend: { kind: 'failure', reason: 'The assessor call failed.' } };
+    }
+    const resume = vi.fn((_runId: string, resumeData: unknown) =>
+      typeof resumeData === 'object' && resumeData !== null && 'retry' in resumeData
+        ? resumeEvents()
+        : failingResume(),
+    );
+    const client: InterviewClient = {
+      start: (input) => ({ runId: input.threadId, events: startEvents() }),
+      resume,
+    };
+    const prepare = vi.fn(async () => prepared);
+    render(<App client={client} prepare={prepare} storage={window.localStorage} />);
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+
+    // Answer the question; the turn faults and the run pauses instead of dying.
+    await userEvent.type(await screen.findByLabelText(/your answer/i), 'I led a migration.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+    expect(await screen.findByText(/the assessor call failed/i)).toBeInTheDocument();
+
+    // The retry resumes the same run with the retry payload and reaches the report.
+    await userEvent.click(screen.getByRole('button', { name: /retry the turn/i }));
+    expect(await screen.findByText(/strong, concrete material/i)).toBeInTheDocument();
+
+    expect(resume).toHaveBeenCalledTimes(2);
+    expect(resume).toHaveBeenNthCalledWith(1, expect.any(String), { answer: 'I led a migration.' });
+    expect(resume).toHaveBeenNthCalledWith(2, expect.any(String), { retry: true });
+    // The retry targets the same run the answer went to, not a fresh one.
+    expect(resume.mock.calls[1]?.[0]).toBe(resume.mock.calls[0]?.[0]);
+  });
+
   it('offers the paste fallback and does not start when a posting link fails to resolve', async () => {
     const prepare = vi.fn(async () => ({
       cvPath: '/data/uploads/x.md',

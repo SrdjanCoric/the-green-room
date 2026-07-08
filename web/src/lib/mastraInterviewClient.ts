@@ -41,7 +41,7 @@ export function createMastraInterviewClient(
     try {
       return (await workflow.runById(runId, {
         fields: OUTCOME_FIELDS,
-      })) as unknown as WorkflowOutcome;
+      })) as WorkflowOutcome;
     } catch {
       return undefined;
     }
@@ -66,7 +66,7 @@ export function createMastraInterviewClient(
 
     resume(
       runId: string,
-      resumeData: { answer: string } | { level: string },
+      resumeData: { answer: string } | { level: string } | { retry: true },
     ): AsyncIterable<InterviewEvent> {
       return (async function* (): AsyncGenerator<InterviewEvent> {
         const tracked = runs.get(runId) ?? { run: await workflow.createRun({ runId }) };
@@ -84,7 +84,7 @@ export function createMastraInterviewClient(
 function buildInputData(input: StartInterviewInput): Record<string, unknown> {
   const data: Record<string, unknown> = {
     cvPath: input.cvPath,
-    resourceId: input.resourceId,
+    candidate: input.candidate,
     threadId: input.threadId,
     researchUrls: input.researchUrls,
   };
