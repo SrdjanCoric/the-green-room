@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from './App';
 import type { PrepareInterviewResponse } from './lib/api';
+import { initialInterviewState } from './lib/interviewMachine';
+import { loadSession, saveSession } from './lib/sessionStore';
 import type { InterviewClient, InterviewEvent, InterviewReport } from './lib/types';
 
 const report: InterviewReport = {
@@ -36,10 +38,13 @@ async function* closingResume(): AsyncGenerator<InterviewEvent> {
   yield { type: 'completed', report };
 }
 
+async function* noEvents(): AsyncGenerator<InterviewEvent> {}
+
 function mockClient(): InterviewClient {
   return {
     start: (input) => ({ runId: input.threadId, events: startEvents() }),
     resume: () => resumeEvents(),
+    observe: () => noEvents(),
   };
 }
 
@@ -120,6 +125,7 @@ describe('App — full interview flow', () => {
     const client: InterviewClient = {
       start: (input) => ({ runId: input.threadId, events: startEvents() }),
       resume: () => closingResume(),
+      observe: () => noEvents(),
     };
     const prepare = vi.fn(async () => prepared);
     render(<App client={client} prepare={prepare} storage={window.localStorage} />);
@@ -146,6 +152,7 @@ describe('App — full interview flow', () => {
     const client: InterviewClient = {
       start: (input) => ({ runId: input.threadId, events: startEvents() }),
       resume: () => closingResume(),
+      observe: () => noEvents(),
     };
     const prepare = vi.fn(async () => prepared);
     render(<App client={client} prepare={prepare} storage={window.localStorage} />);
@@ -173,6 +180,7 @@ describe('App — full interview flow', () => {
     const client: InterviewClient = {
       start: (input) => ({ runId: input.threadId, events: startEvents() }),
       resume: () => closingResume(),
+      observe: () => noEvents(),
     };
     const prepare = vi.fn(async () => prepared);
     render(<App client={client} prepare={prepare} storage={window.localStorage} />);
@@ -206,6 +214,7 @@ describe('App — full interview flow', () => {
     const client: InterviewClient = {
       start: (input) => ({ runId: input.threadId, events: startEvents() }),
       resume,
+      observe: () => noEvents(),
     };
     const prepare = vi.fn(async () => prepared);
     render(<App client={client} prepare={prepare} storage={window.localStorage} />);
@@ -242,6 +251,7 @@ describe('App — full interview flow', () => {
         throw new Error('start must not be called after a failed posting fetch');
       }),
       resume: vi.fn(),
+      observe: () => noEvents(),
     };
     render(<App client={client} prepare={prepare} storage={window.localStorage} />);
 
@@ -254,5 +264,283 @@ describe('App — full interview flow', () => {
 
     expect(await screen.findByText(/couldn't read the posting/i)).toBeInTheDocument();
     expect(client.start).not.toHaveBeenCalled();
+  });
+});
+
+describe('App — durable reconnect', () => {
+  beforeEach(() => {
+    window.location.hash = '';
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  /** A run mid-interview in a previous page load: history entry, saved session. */
+  function seedLiveRun(runId: string) {
+    window.localStorage.setItem(
+      'green-room:history',
+      JSON.stringify([{ runId, startedAt: '2026-07-08T09:00:00Z', status: 'live' }]),
+    );
+    saveSession(window.localStorage, runId, {
+      ...initialInterviewState,
+      phase: 'awaitingAnswer',
+      runId,
+      transcript: [{ question: 'Proudest work?', answer: 'I led a migration.' }],
+      currentQuestion: 'What did the migra',
+      currentQuestionNumber: 2,
+    });
+  }
+
+  async function* observedQuestion(): AsyncGenerator<InterviewEvent> {
+    // The rejoined stream re-plays the in-flight segment from its start: the reply
+    // opens over (question-start), then streams in full — never appended to the
+    // snapshot's partial text.
+    yield { type: 'question-start' };
+    yield { type: 'question-delta', text: 'What did the migration teach you?' };
+    yield {
+      type: 'suspended',
+      suspend: { kind: 'question', question: 'What did the migration teach you?', questionNumber: 2 },
+    };
+  }
+
+  it('rejoins an in-flight run after a reload, then completes it without restarting', async () => {
+    seedLiveRun('run-live');
+    window.location.hash = '#/interview/run-live';
+    const observe = vi.fn(() => observedQuestion());
+    const resume = vi.fn(() => resumeEvents());
+    const start = vi.fn(() => {
+      throw new Error('a reload must rejoin the run, not start a new one');
+    });
+    render(
+      <App client={{ start, resume, observe }} prepare={vi.fn(async () => prepared)} storage={window.localStorage} />,
+    );
+
+    // The in-flight question is rebuilt from the rejoined stream — replacing the
+    // snapshot's partial text, not duplicating it.
+    expect(await screen.findByText('What did the migration teach you?')).toBeInTheDocument();
+    expect(screen.queryByText(/What did the migra$/)).not.toBeInTheDocument();
+    expect(observe).toHaveBeenCalledExactlyOnceWith('run-live');
+    expect(start).not.toHaveBeenCalled();
+
+    // The rejoined run continues to completion over the normal resume path.
+    await userEvent.type(screen.getByLabelText(/your answer/i), 'It taught me plenty.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+    expect(await screen.findByText(/strong, concrete material/i)).toBeInTheDocument();
+    expect(resume).toHaveBeenCalledExactlyOnceWith('run-live', { answer: 'It taught me plenty.' });
+
+    // The finished run's session snapshot is gone; the report is cached instead.
+    expect(loadSession(window.localStorage, 'run-live')).toBeNull();
+  });
+
+  it('reopens a live run from the playbill by rejoining its stream', async () => {
+    seedLiveRun('run-live');
+    const observe = vi.fn(() => observedQuestion());
+    render(
+      <App
+        client={{ ...mockClient(), observe }}
+        prepare={vi.fn(async () => prepared)}
+        storage={window.localStorage}
+      />,
+    );
+
+    await userEvent.click(screen.getByText(/now playing/i));
+
+    expect(await screen.findByText('What did the migration teach you?')).toBeInTheDocument();
+    expect(observe).toHaveBeenCalledExactlyOnceWith('run-live');
+    expect(window.location.hash).toBe('#/interview/run-live');
+  });
+
+  it('persists the interview session as the run streams, so a reload has a snapshot', async () => {
+    const prepare = vi.fn(async () => prepared);
+    render(<App client={mockClient()} prepare={prepare} storage={window.localStorage} />);
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+    expect(await screen.findByText('Proudest work?')).toBeInTheDocument();
+
+    const runId = window.location.hash.replace('#/interview/', '');
+    expect(loadSession(window.localStorage, runId)).toMatchObject({
+      phase: 'awaitingAnswer',
+      currentQuestion: 'Proudest work?',
+    });
+  });
+});
+
+describe('App — reconnect resilience', () => {
+  beforeEach(() => {
+    window.location.hash = '';
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  async function beginInterview() {
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+  }
+
+  it('ignores a superseded run’s stream after reconnecting to another run', async () => {
+    // Run A is mid-interview; run B is live from an earlier session. Opening B must
+    // not let A's still-running stream keep writing into B's screen or history.
+    window.localStorage.setItem(
+      'green-room:history',
+      JSON.stringify([{ runId: 'run-b', startedAt: '2026-07-08T09:00:00Z', status: 'live' }]),
+    );
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    let runAClosed = false;
+    async function* runAEvents(): AsyncGenerator<InterviewEvent> {
+      try {
+        yield { type: 'suspended', suspend: { kind: 'question', question: 'Proudest work?', questionNumber: 1 } };
+        await gateA;
+        yield { type: 'completed', report };
+      } finally {
+        runAClosed = true;
+      }
+    }
+    async function* runBEvents(): AsyncGenerator<InterviewEvent> {
+      yield {
+        type: 'suspended',
+        suspend: { kind: 'question', question: 'A question for run B?', questionNumber: 3 },
+      };
+    }
+    const observe = vi.fn(() => runBEvents());
+    const client: InterviewClient = {
+      start: (input) => ({ runId: input.threadId, events: runAEvents() }),
+      resume: () => resumeEvents(),
+      observe,
+    };
+    render(<App client={client} prepare={vi.fn(async () => prepared)} storage={window.localStorage} />);
+
+    await beginInterview();
+    expect(await screen.findByText('Proudest work?')).toBeInTheDocument();
+
+    // Switch to run B from the playbill, then let run A's stream finish behind it.
+    // The fresh run A sits first in the playbill; B is the older entry below it.
+    await userEvent.click(screen.getAllByText(/now playing/i)[1]!);
+    expect(await screen.findByText('A question for run B?')).toBeInTheDocument();
+    releaseA();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // B's screen and history are untouched by A's completion.
+    expect(screen.getByText('A question for run B?')).toBeInTheDocument();
+    expect(screen.queryByText(/strong, concrete material/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/★ closed/i)).not.toBeInTheDocument();
+    expect(window.localStorage.getItem('green-room:report:run-b')).toBeNull();
+    // And A's superseded stream was closed eagerly, not left running behind B.
+    expect(runAClosed).toBe(true);
+  });
+
+  it('rejoins the run when its stream drops mid-session, without a reload', async () => {
+    async function* dyingStart(): AsyncGenerator<InterviewEvent> {
+      yield { type: 'cue', label: 'Reading your CV' };
+      throw new Error('network dropped');
+    }
+    let observedRunId: string | null = null;
+    const observe = vi.fn((runId: string) => {
+      observedRunId = runId;
+      return (async function* (): AsyncGenerator<InterviewEvent> {
+        yield {
+          type: 'suspended',
+          suspend: { kind: 'question', question: 'Back on the air?', questionNumber: 1 },
+        };
+      })();
+    });
+    const client: InterviewClient = {
+      start: (input) => ({ runId: input.threadId, events: dyingStart() }),
+      resume: () => resumeEvents(),
+      observe,
+    };
+    render(<App client={client} prepare={vi.fn(async () => prepared)} storage={window.localStorage} />);
+
+    await beginInterview();
+
+    // The dropped stream is rejoined in place: no error screen, the question lands.
+    expect(await screen.findByText('Back on the air?')).toBeInTheDocument();
+    expect(observe).toHaveBeenCalledOnce();
+    expect(observedRunId).toBe(window.location.hash.replace('#/interview/', ''));
+  });
+
+  it('recovers over the online event after an offline failure, and tracks history status', async () => {
+    async function* dyingStart(): AsyncGenerator<InterviewEvent> {
+      yield { type: 'cue', label: 'Reading your CV' };
+      throw new Error('network dropped');
+    }
+    const observe = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        // Still offline: the immediate rejoin fails too, delivering nothing.
+        return (async function* (): AsyncGenerator<InterviewEvent> {
+          yield* [];
+          throw new Error('still offline');
+        })();
+      })
+      .mockImplementation(() => {
+        return (async function* (): AsyncGenerator<InterviewEvent> {
+          yield {
+            type: 'suspended',
+            suspend: { kind: 'question', question: 'Back on the air?', questionNumber: 1 },
+          };
+        })();
+      });
+    const client: InterviewClient = {
+      start: (input) => ({ runId: input.threadId, events: dyingStart() }),
+      resume: () => resumeEvents(),
+      observe,
+    };
+    render(<App client={client} prepare={vi.fn(async () => prepared)} storage={window.localStorage} />);
+
+    await beginInterview();
+
+    // Both the stream and the rejoin died: the run lands on the error screen and
+    // its playbill entry stops claiming to be live.
+    expect(await screen.findByText(/still offline/i)).toBeInTheDocument();
+    expect(screen.getByText(/went dark/i)).toBeInTheDocument();
+
+    // The connection returns: the run rejoins by itself and is live again in the
+    // playbill — a later reload must find it rejoinable, not written off.
+    window.dispatchEvent(new Event('online'));
+    expect(await screen.findByText('Back on the air?')).toBeInTheDocument();
+    expect(screen.getByText(/now playing/i)).toBeInTheDocument();
+    expect(screen.queryByText(/went dark/i)).not.toBeInTheDocument();
+  });
+
+  it('reopens a failed run from the playbill by attempting the reconnect again', async () => {
+    window.localStorage.setItem(
+      'green-room:history',
+      JSON.stringify([{ runId: 'run-dark', startedAt: '2026-07-08T09:00:00Z', status: 'failed' }]),
+    );
+    const observe = vi.fn(() =>
+      (async function* (): AsyncGenerator<InterviewEvent> {
+        yield {
+          type: 'suspended',
+          suspend: { kind: 'question', question: 'Second chance?', questionNumber: 2 },
+        };
+      })(),
+    );
+    render(
+      <App
+        client={{ ...mockClient(), observe }}
+        prepare={vi.fn(async () => prepared)}
+        storage={window.localStorage}
+      />,
+    );
+
+    await userEvent.click(screen.getByText(/went dark/i));
+
+    expect(await screen.findByText('Second chance?')).toBeInTheDocument();
+    expect(observe).toHaveBeenCalledExactlyOnceWith('run-dark');
+    // The retried run is live again in the playbill.
+    expect(screen.getByText(/now playing/i)).toBeInTheDocument();
   });
 });

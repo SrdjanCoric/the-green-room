@@ -24,7 +24,7 @@ export const EMBEDDING_DIMENSION = 1536;
 /** Directory (under `knowledge/`) holding the private, user-supplied corpus. */
 export const PRIVATE_CORPUS_DIRNAME = 'how-to-answer';
 
-/** Directory (under `knowledge/`) holding the committed synthetic sample corpus. */
+/** Directory (under `knowledge/`) holding a local sample corpus, when one exists. */
 export const SAMPLE_CORPUS_DIRNAME = 'samples';
 
 /**
@@ -53,9 +53,10 @@ export function knowledgeDbUrl(mastraDbUrl: string, override?: string): string {
 
 /**
  * Resolve which corpus to ingest. The private `how-to-answer/` corpus wins when it
- * holds documents; otherwise ingestion falls back to the committed `samples/` so the
- * app runs out of the box without the private corpus. An explicit override always
- * wins. `hasMarkdown` is injected so the choice is pure and unit-testable.
+ * holds documents; otherwise ingestion falls back to a local `samples/` directory.
+ * Neither ships with the repo — the app ships the built index instead, so ingestion
+ * is only for replacing it. An explicit override always wins. `hasMarkdown` is
+ * injected so the choice is pure and unit-testable.
  */
 export function resolveCorpusDir(opts: {
   root: string;

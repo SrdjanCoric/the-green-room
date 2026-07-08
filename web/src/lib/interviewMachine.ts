@@ -66,6 +66,8 @@ export const initialInterviewState: InterviewState = {
 
 export type InterviewAction =
   | { type: 'START'; runId: string }
+  /** Rejoin an in-flight run after a reload, restoring its saved snapshot if any. */
+  | { type: 'RECONNECT'; runId: string; snapshot: InterviewState | null }
   | { type: 'EVENT'; event: InterviewEvent }
   | { type: 'SUBMIT_ANSWER'; answer: string }
   | { type: 'SUBMIT_LEVEL' }
@@ -83,6 +85,23 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
         phase: 'starting',
         runId: action.runId,
       };
+
+    // The snapshot restores the settled transcript; the in-flight section is rebuilt
+    // by the observed stream's replay, so hydrating partial text is safe either way.
+    // A cold reconnect (snapshot lost) still works — the stream and the run's
+    // persisted state carry the current turn; only past turns' display is gone.
+    // A snapshot saved in the error phase rehydrates as a reconnect in progress:
+    // re-rendering the stale error would hide the very rejoin the user asked for.
+    case 'RECONNECT': {
+      if (!action.snapshot) {
+        return { ...initialInterviewState, phase: 'starting', runId: action.runId, cue: 'Reconnecting…' };
+      }
+      const snapshot = { ...action.snapshot, runId: action.runId };
+      if (snapshot.phase === 'error') {
+        return { ...snapshot, phase: 'starting', error: null, cue: 'Reconnecting…' };
+      }
+      return snapshot;
+    }
 
     case 'SUBMIT_ANSWER':
       return {
@@ -165,9 +184,17 @@ function applyEvent(state: InterviewState, event: InterviewEvent): InterviewStat
       if (event.suspend.kind === 'failure') {
         return { ...state, phase: 'turnFailed', error: event.suspend.reason, cue: null };
       }
+      // A restored snapshot can hold an answer the run never received (the page
+      // died between submit and the resume reaching the server). If the run is
+      // still suspended on that same question, the trailing entry is that lost
+      // answer — drop it so the re-answered turn isn't recorded twice.
       return {
         ...state,
         phase: 'awaitingAnswer',
+        transcript:
+          state.transcript.at(-1)?.question === event.suspend.question
+            ? state.transcript.slice(0, -1)
+            : state.transcript,
         currentQuestion: event.suspend.question,
         currentQuestionNumber: event.suspend.questionNumber,
         cue: null,
