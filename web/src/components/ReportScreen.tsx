@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { InterviewReport } from '../lib/types';
 
@@ -15,6 +15,13 @@ export function ReportScreen({ report, onSave }: ReportScreenProps) {
   const [tab, setTab] = useState<Tab>('coaching');
   const [saved, setSaved] = useState(false);
   const { coaching, transcript } = report;
+
+  // The notes read from the top. Without this the page keeps the interview's scroll
+  // position — the bottom, where the interview ended. Keyed on the report identity,
+  // not the mount: opening another cached report only swaps the prop.
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [report]);
 
   function save() {
     onSave?.();
