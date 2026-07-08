@@ -104,7 +104,18 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     [store, patchHistory],
   );
 
-  const interview = useInterview(interviewClient, handleCompleted, store);
+  // A run that settles in a hard error stops claiming to be live in the playbill;
+  // reopening it retries the reconnect (the failure may have been the connection).
+  const handleFailed = useCallback(
+    (runId: string) => patchHistory(runId, { status: 'failed' }),
+    [patchHistory],
+  );
+
+  const interview = useInterview(interviewClient, {
+    onCompleted: handleCompleted,
+    onFailed: handleFailed,
+    storage: store,
+  });
 
   // A reload that lands on an interview route rejoins that run's in-flight stream
   // (the session snapshot restores the transcript; the stream rebuilds the current
@@ -190,6 +201,13 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     }
   }
 
+  function rejoin(runId: string) {
+    // The retried run is live again until it settles otherwise.
+    patchHistory(runId, { status: 'live' });
+    interview.reconnect(runId);
+    navigate({ name: 'interview', runId });
+  }
+
   function openEntry(entry: RunHistoryEntry) {
     if (entry.status === 'done') {
       const cached = loadCachedReport(store, entry.runId);
@@ -200,14 +218,20 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
       }
     }
     if (entry.runId === interview.state.runId) {
+      // The active run — but if its stream died, clicking it retries the reconnect
+      // instead of re-showing the error screen.
+      if (interview.state.phase === 'error' && entry.status !== 'done') {
+        rejoin(entry.runId);
+        return;
+      }
       navigate({ name: interview.state.phase === 'report' ? 'report' : 'interview', runId: entry.runId });
       return;
     }
-    // A live run from an earlier page load: rejoin its in-flight stream where it
-    // left off rather than restarting it (or refusing).
-    if (entry.status === 'live') {
-      interview.reconnect(entry.runId);
-      navigate({ name: 'interview', runId: entry.runId });
+    // A live run from an earlier page load rejoins its in-flight stream where it
+    // left off; a failed one gets the reconnect retried (the failure may have been
+    // transient — the run's durable state decides).
+    if (entry.status === 'live' || entry.status === 'failed') {
+      rejoin(entry.runId);
       return;
     }
     setPrepError('That interview is no longer available.');

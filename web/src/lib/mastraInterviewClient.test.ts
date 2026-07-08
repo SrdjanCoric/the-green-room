@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StreamChunk } from './chunkInterpreter';
 import { createMastraInterviewClient } from './mastraInterviewClient';
-import { loadStreamOffset } from './sessionStore';
+import { loadRunMeta } from './sessionStore';
 import type { InterviewEvent, StartInterviewInput } from './types';
 
 const { workflowMock } = vi.hoisted(() => ({
@@ -45,6 +45,19 @@ function chunkStream(chunks: StreamChunk[]): ReadableStream<unknown> {
   });
 }
 
+/** A stream that delivers some chunks and then dies mid-segment (the disconnect). */
+function dyingStream(chunks: StreamChunk[]): ReadableStream<unknown> {
+  let delivered = 0;
+  return new ReadableStream({
+    // Pull-based so the chunks are actually read before the failure lands —
+    // erroring up front would discard the queue and deliver nothing.
+    pull(controller) {
+      if (delivered < chunks.length) controller.enqueue(chunks[delivered++]);
+      else controller.error(new Error('connection dropped'));
+    },
+  });
+}
+
 /** A question segment as the server streams it: step cue, reply start, tokens. */
 function questionSegment(text: string): StreamChunk[] {
   return [
@@ -58,6 +71,16 @@ function questionSegment(text: string): StreamChunk[] {
 async function collect(iter: AsyncIterable<InterviewEvent>): Promise<InterviewEvent[]> {
   const out: InterviewEvent[] = [];
   for await (const event of iter) out.push(event);
+  return out;
+}
+
+async function collectUntilError(iter: AsyncIterable<InterviewEvent>): Promise<InterviewEvent[]> {
+  const out: InterviewEvent[] = [];
+  try {
+    for await (const event of iter) out.push(event);
+  } catch {
+    // The disconnect surfaces here; the caller inspects what arrived before it.
+  }
   return out;
 }
 
@@ -94,7 +117,7 @@ describe('createMastraInterviewClient', () => {
 
     // The question segment streams four chunks; the persisted offset mirrors the
     // server's chunk cache so observe() can skip everything already seen.
-    expect(loadStreamOffset(window.localStorage, RUN_ID)).toBe(4);
+    expect(loadRunMeta(window.localStorage, RUN_ID).offset).toBe(4);
   });
 
   it('resume() keeps counting from the persisted offset', async () => {
@@ -105,7 +128,7 @@ describe('createMastraInterviewClient', () => {
     await collect(client.start(startInput).events);
     await collect(client.resume(RUN_ID, { answer: 'My answer.' }));
 
-    expect(loadStreamOffset(window.localStorage, RUN_ID)).toBe(8);
+    expect(loadRunMeta(window.localStorage, RUN_ID).offset).toBe(8);
   });
 
   it('observe() rejoins the run stream at the persisted offset and settles on the outcome', async () => {
@@ -150,6 +173,94 @@ describe('createMastraInterviewClient', () => {
 
     await collect(client.observe(RUN_ID));
 
-    expect(loadStreamOffset(window.localStorage, RUN_ID)).toBe(4);
+    expect(loadRunMeta(window.localStorage, RUN_ID).offset).toBe(4);
   });
+
+  it('persists chunks seen before a mid-segment disconnect, and observe completes the content once', async () => {
+    const segment = questionSegment('Full question?');
+    const run = fakeRun({
+      // The connection dies two chunks into the segment.
+      stream: vi.fn(async () => dyingStream(segment.slice(0, 2))),
+    });
+    workflowMock.createRun.mockResolvedValue(run);
+    const client = createMastraInterviewClient('http://localhost', window.localStorage);
+
+    await collectUntilError(client.start(startInput).events);
+    expect(loadRunMeta(window.localStorage, RUN_ID).offset).toBe(2);
+
+    // A fresh page (new client, same storage) rejoins; the server replays the
+    // segment from its start and the interpreted events rebuild it exactly once.
+    const reloaded = createMastraInterviewClient('http://localhost', window.localStorage);
+    const events = await collect(reloaded.observe(RUN_ID));
+
+    expect(run.observe).toHaveBeenCalledWith({ offset: 2 });
+    expect(events.filter((e) => e.type === 'question-delta')).toEqual([
+      { type: 'question-delta', text: 'Full question?' },
+    ]);
+    expect(events.at(-1)).toEqual({
+      type: 'suspended',
+      suspend: { kind: 'question', question: 'Full question?', questionNumber: 1 },
+    });
+  });
+
+  it('restores the run’s model ensemble from storage after a reload', async () => {
+    const run = fakeRun();
+    workflowMock.createRun.mockResolvedValue(run);
+    const client = createMastraInterviewClient('http://localhost', window.localStorage);
+    await collect(
+      client.start({
+        ...startInput,
+        ensemble: { provider: 'openai', fastModel: 'gpt-fast', smartModel: 'gpt-smart' },
+      }).events,
+    );
+
+    // A fresh page: the in-memory run map is gone, only storage survives.
+    const reloaded = createMastraInterviewClient('http://localhost', window.localStorage);
+    await collect(reloaded.resume(RUN_ID, { answer: 'My answer.' }));
+
+    expect(run.resumeStream).toHaveBeenCalledWith({
+      resumeData: { answer: 'My answer.' },
+      requestContext: { 'model.fast': 'openai/gpt-fast', 'model.smart': 'openai/gpt-smart' },
+    });
+  });
+
+  it('observe() after a mid-turn reload waits out the pre-resume state instead of re-presenting it', async () => {
+    const preResume = {
+      status: 'suspended',
+      updatedAt: new Date('2026-07-08T10:00:00Z'),
+      suspendPayload: { kind: 'question', question: 'Question one?', questionNumber: 1 },
+    };
+    const settled = {
+      status: 'suspended',
+      updatedAt: new Date('2026-07-08T10:05:00Z'),
+      suspendPayload: { kind: 'question', question: 'Question two?', questionNumber: 2 },
+    };
+    workflowMock.runById.mockResolvedValue(preResume);
+    const run = fakeRun({
+      // The resume request goes out, then the page dies before anything arrives.
+      resumeStream: vi.fn(async () => dyingStream([])),
+    });
+    workflowMock.createRun.mockResolvedValue(run);
+
+    const client = createMastraInterviewClient('http://localhost', window.localStorage);
+    await collect(client.start(startInput).events);
+    await collectUntilError(client.resume(RUN_ID, { answer: 'A1.' }));
+    // The floor is armed: anything at or before the pre-resume write is not an outcome.
+    expect(loadRunMeta(window.localStorage, RUN_ID).staleAsOf).toBe(preResume.updatedAt.getTime());
+
+    // After the reload, the run's snapshot still shows the answered question for a
+    // while; observe must wait for the turn's real result, not settle on the past.
+    let reads = 0;
+    workflowMock.runById.mockImplementation(async () => (++reads < 2 ? preResume : settled));
+    const reloaded = createMastraInterviewClient('http://localhost', window.localStorage);
+    const events = await collect(reloaded.observe(RUN_ID));
+
+    expect(events.at(-1)).toEqual({
+      type: 'suspended',
+      suspend: { kind: 'question', question: 'Question two?', questionNumber: 2 },
+    });
+    // The floor disarms once the turn settles, so a later reload while genuinely
+    // suspended does not reject the legitimate state.
+    expect(loadRunMeta(window.localStorage, RUN_ID).staleAsOf).toBeUndefined();
+  }, 20000);
 });
