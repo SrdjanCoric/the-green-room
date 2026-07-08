@@ -31,3 +31,9 @@ plans/
 
 # Task review output (branch-scoped, ephemeral)
 reviews/
+
+# Playwright MCP browser-session scratch artifacts
+.playwright-mcp/
+
+# Local design mockups — not shipped
+design/

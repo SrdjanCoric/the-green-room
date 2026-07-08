@@ -1,8 +1,16 @@
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
+import { RequestContext } from '@mastra/core/request-context';
 import { describe, expect, it } from 'vitest';
 
-import { assertCvPathAllowed, isPathWithin } from './cv-path-guard';
+import {
+  assertCvPathAllowed,
+  CV_TRUST_CONTEXT_KEY,
+  grantCvPathTrust,
+  isPathWithin,
+  isTrustedCvContext,
+} from './cv-path-guard';
 
 const base = '/srv/app/data/uploads';
 
@@ -40,5 +48,27 @@ describe('assertCvPathAllowed', () => {
     expect(() =>
       assertCvPathAllowed('/home/me/cv.pdf', { uploadsDir: base, trustLocalPaths: true }),
     ).not.toThrow();
+  });
+});
+
+describe('CV path trust token', () => {
+  it('trusts a context this process granted trust to', () => {
+    const requestContext = new RequestContext();
+    grantCvPathTrust(requestContext);
+    expect(isTrustedCvContext(requestContext)).toBe(true);
+  });
+
+  it('never trusts a context without the grant', () => {
+    expect(isTrustedCvContext(new RequestContext())).toBe(false);
+  });
+
+  it('never trusts a client that sets the key with a guessed value', () => {
+    // Over HTTP every request-context key is caller-controlled, so possession of
+    // the key name must not grant trust — only the per-process value can.
+    for (const guess of ['1', 'true', randomUUID()]) {
+      const requestContext = new RequestContext();
+      requestContext.set(CV_TRUST_CONTEXT_KEY, guess);
+      expect(isTrustedCvContext(requestContext)).toBe(false);
+    }
   });
 });

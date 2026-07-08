@@ -32,6 +32,9 @@ export const candidateMemory = new Memory({
     },
     semanticRecall: false,
     generateTitle: false,
-    lastMessages: 20,
+    // Working memory only: no agent runs with thread history flowing, so a positive
+    // `lastMessages` would imply a recorded conversation that does not exist. `false`
+    // disables history injection outright and says so.
+    lastMessages: false,
   },
 });

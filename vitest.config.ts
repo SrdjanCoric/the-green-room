@@ -7,9 +7,6 @@ export default defineConfig({
     // database so tests never read or grow the on-disk ./data/mastra.db.
     env: {
       INTERVIEW_COACH_DB_URL: ':memory:',
-      // Tests drive the workflow with trusted fixture CV paths, so opt out of the
-      // upload-directory confinement (which only guards untrusted server-side runs).
-      INTERVIEW_COACH_TRUST_LOCAL_CV: '1',
     },
   },
 });

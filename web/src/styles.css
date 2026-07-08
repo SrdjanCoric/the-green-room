@@ -844,10 +844,13 @@ details.ens summary .h {
   border-color: var(--gold);
 }
 .notes-verdict {
-  font-family: var(--serif);
-  font-size: 24px;
-  line-height: 1.55;
-  max-width: 64ch;
+  /* Newsreader over Playfair here: same literary italic voice, but drawn for
+     paragraph reading — Playfair's high-contrast strokes blur at text sizes. */
+  font-family: var(--body);
+  font-size: 23px;
+  line-height: 1.7;
+  letter-spacing: 0.01em;
+  max-width: 58ch;
   margin: 0 auto 10px;
   text-align: center;
   font-style: italic;
@@ -881,9 +884,14 @@ details.ens summary .h {
 .script-note .marg {
   font-family: var(--hand);
   color: var(--ink-note);
-  font-size: 23px;
-  line-height: 1.25;
-  transform: rotate(-1.4deg);
+  /* Caveat has a small x-height, so legibility comes from weight and line height
+     rather than size — a medium weight and more breathing room keep the hand-note
+     character and the off-straight tilt readable without enlarging the note. */
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.2px;
+  transform: rotate(-1deg);
   border-top: 1px dashed rgba(224, 71, 58, 0.4);
   margin-top: 12px;
   padding-top: 10px;
