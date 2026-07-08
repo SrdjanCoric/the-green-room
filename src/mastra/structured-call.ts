@@ -40,7 +40,7 @@ export interface StructuredGenerator {
 export interface TextStreamer {
   stream(
     prompt: string,
-    options: { requestContext: RequestContext },
+    options: { requestContext: RequestContext; instructions?: string },
   ): Promise<{
     fullStream: AsyncIterable<{ type: string }>;
     text: Promise<string>;
@@ -212,7 +212,7 @@ export async function streamingTextCall(
   agent: TextStreamer,
   prompt: string,
   requestContext: RequestContext,
-  options: StructuredCallOptions & { sink?: ChunkSink },
+  options: StructuredCallOptions & { sink?: ChunkSink; instructions?: string },
 ): Promise<string> {
   return withValidationRetries({
     prompt,
@@ -220,7 +220,12 @@ export async function streamingTextCall(
     description: options.description,
     what: 'reply text',
     attempt: async (currentPrompt) => {
-      const stream = await agent.stream(currentPrompt, { requestContext });
+      const stream = await agent.stream(
+        currentPrompt,
+        options.instructions === undefined
+          ? { requestContext }
+          : { requestContext, instructions: options.instructions },
+      );
       // Each attempt opens with a `text-start` before its first token, so a consumer
       // accumulating deltas can discard a failed attempt's partial text when a
       // validation retry streams the reply again, instead of appending the two.

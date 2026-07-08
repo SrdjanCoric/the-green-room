@@ -8,8 +8,10 @@ import {
 import {
   advanceCoverage,
   agentBrainFactory,
+  agentClosingFactory,
   decideNextMove,
   type BrainFactory,
+  type ClosingFactory,
 } from '../../interview/adaptive-brain';
 import { describeError } from '../../errors';
 import {
@@ -224,16 +226,45 @@ export function interviewLoopDone({
   return Promise.resolve(inputData.done === true);
 }
 
-export const closingStep = createStep({
-  id: 'closing',
-  inputSchema: interviewStateSchema,
-  outputSchema: closedInterviewStateSchema,
-  execute: ({ inputData }) =>
-    Promise.resolve({
-      ...inputData,
-      closingMessage:
-        inputData.transcript.length > 0
-          ? 'That covers what I wanted to ask. Thanks for walking me through it today.'
-          : 'That covers what I wanted to ask today. Thanks for your time.',
-    }),
-});
+/** The closing lines used when there is nothing to say goodbye over, or the agent fails. */
+function staticClosing(state: InterviewState): string {
+  return state.transcript.length > 0
+    ? 'That covers what I wanted to ask. Thanks for walking me through it today.'
+    : 'That covers what I wanted to ask today. Thanks for your time.';
+}
+
+/**
+ * Build the closing step around a closing factory. The interviewer says goodbye in its
+ * own words, written fresh over the finished transcript and streamed through the step's
+ * writer so the client sees it typed out before grading begins. The closing must never
+ * strand a finished transcript: an agent failure that survives the bounded retries
+ * degrades to the static line, and an empty transcript (the director wrapped up before
+ * asking anything) skips the agent entirely — there is nothing to recall.
+ */
+export function createClosingStep(makeClosing: ClosingFactory) {
+  return createStep({
+    id: 'closing',
+    inputSchema: interviewStateSchema,
+    outputSchema: closedInterviewStateSchema,
+    execute: async ({ inputData, mastra, requestContext, writer }) => {
+      const fallback = staticClosing(inputData);
+      if (inputData.transcript.length > 0) {
+        try {
+          const closingMessage = await makeClosing(mastra, requestContext, writer)(inputData);
+          return { ...inputData, closingMessage };
+        } catch {
+          // The fallback below stands; grading matters more than the goodbye.
+        }
+      }
+      // The agent was skipped or failed — possibly after streaming a partial goodbye.
+      // Put the static line on the run stream too, so a watching client converges on
+      // the same closing the run records instead of keeping truncated text.
+      await writer.write({ type: 'text-start', payload: {} });
+      await writer.write({ type: 'text-delta', payload: { text: fallback } });
+      return { ...inputData, closingMessage: fallback };
+    },
+  });
+}
+
+/** The production closing step, spoken by the interviewer agent. */
+export const closingStep = createClosingStep(agentClosingFactory);
