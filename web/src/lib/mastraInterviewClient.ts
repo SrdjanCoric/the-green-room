@@ -2,6 +2,7 @@ import { MastraClient } from '@mastra/client-js';
 
 import type { StreamChunk } from './chunkInterpreter';
 import type { WorkflowOutcome } from './readOutcome';
+import { loadStreamOffset, saveStreamOffset } from './sessionStore';
 import { streamToEvents } from './streamToEvents';
 import type { EnsembleSelection, InterviewClient, InterviewEvent, StartInterviewInput } from './types';
 
@@ -38,6 +39,7 @@ interface TrackedRun {
  */
 export function createMastraInterviewClient(
   baseUrl: string = window.location.origin,
+  storage: Storage = window.localStorage,
 ): InterviewClient {
   // Same-origin by default: the Vite dev server proxies `/api` and `/prepare-interview`
   // to the Mastra server, so the browser never makes a cross-origin request.
@@ -46,6 +48,16 @@ export function createMastraInterviewClient(
   // Keep each run's handle and request context so a resume targets the same run and
   // re-supplies the model tiers (Mastra doesn't persist request context across resume).
   const runs = new Map<string, TrackedRun>();
+
+  // The server caches every chunk it delivers over `stream`/`resumeStream`, keyed by
+  // run id. Counting what this browser receives over those same transports keeps a
+  // persisted mirror of that cache's length, so a reloaded page can rejoin the run's
+  // stream at the first chunk it hasn't seen. Observed (rejoined) streams replay
+  // without being re-cached, so they must not advance the count.
+  const trackOffset = (runId: string): (() => void) => {
+    let count = loadStreamOffset(storage, runId);
+    return () => saveStreamOffset(storage, runId, ++count);
+  };
 
   const readRunState = async (runId: string): Promise<WorkflowOutcome | undefined> => {
     try {
@@ -83,12 +95,14 @@ export function createMastraInterviewClient(
         const requestContext = buildRequestContext(input.ensemble);
         const run = await workflow.createRun({ runId: input.threadId });
         runs.set(run.runId, { run, requestContext });
+        // A fresh run starts a fresh chunk count (the thread id is new, but be safe).
+        saveStreamOffset(storage, run.runId, 0);
         const stream = await run.stream({
           inputData: buildInputData(input),
           requestContext,
           closeOnSuspend: true,
         });
-        yield* consumeStream(stream, fetchOutcome(run.runId));
+        yield* consumeStream(stream, fetchOutcome(run.runId), trackOffset(run.runId));
       })();
       // The runId is the thread id we created the run with, so callers can resume it.
       return { runId: input.threadId, events };
@@ -111,7 +125,22 @@ export function createMastraInterviewClient(
           resumeData,
           requestContext: tracked.requestContext,
         });
-        yield* consumeStream(stream, fetchOutcome(runId, tracked.lastWriteTime));
+        yield* consumeStream(stream, fetchOutcome(runId, tracked.lastWriteTime), trackOffset(runId));
+      })();
+    },
+
+    observe(runId: string): AsyncIterable<InterviewEvent> {
+      return (async function* (): AsyncGenerator<InterviewEvent> {
+        const tracked = runs.get(runId) ?? { run: await workflow.createRun({ runId }) };
+        runs.set(runId, tracked);
+        // Replay skips the chunks this browser already received; the server then
+        // re-plays the in-flight segment from its start (each segment opens with
+        // `workflow-start`/step-start chunks), so the interpreter's start-over events
+        // rebuild the current section without duplicating settled content. When the
+        // live stream is gone entirely (server restart), the stream closes at once
+        // and the run's persisted state below settles the turn.
+        const stream = await tracked.run.observe({ offset: loadStreamOffset(storage, runId) });
+        yield* consumeStream(stream, fetchOutcome(runId));
       })();
     },
   };
@@ -158,20 +187,26 @@ function buildRequestContext(ensemble?: EnsembleSelection): Record<string, strin
 async function* consumeStream(
   stream: ReadableStream<unknown>,
   fetchOutcome: () => Promise<WorkflowOutcome | undefined>,
+  onChunk?: () => void,
 ): AsyncGenerator<InterviewEvent> {
   const reader = stream.getReader();
   try {
-    yield* streamToEvents(readReader(reader), fetchOutcome);
+    yield* streamToEvents(readReader(reader, onChunk), fetchOutcome);
   } finally {
     await reader.cancel().catch(() => {});
   }
 }
 
 /** Read a locked stream reader as an async iterable of chunks. */
-async function* readReader(reader: ReadableStreamDefaultReader<unknown>): AsyncGenerator<StreamChunk> {
+async function* readReader(
+  reader: ReadableStreamDefaultReader<unknown>,
+  onChunk?: () => void,
+): AsyncGenerator<StreamChunk> {
   for (;;) {
     const { done, value } = await reader.read();
     if (done) return;
-    if (value) yield value as StreamChunk;
+    if (!value) continue;
+    onChunk?.();
+    yield value as StreamChunk;
   }
 }

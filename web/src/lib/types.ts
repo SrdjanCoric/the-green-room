@@ -110,4 +110,10 @@ export interface InterviewClient {
     runId: string,
     resumeData: { answer: string } | { level: string } | { retry: true },
   ): AsyncIterable<InterviewEvent>;
+  /**
+   * Rejoin an in-flight run's stream after a disconnect (a page reload, a dropped
+   * connection) and keep streaming where it left off. Settles from the run's
+   * persisted state even when the live stream is gone (e.g. the server restarted).
+   */
+  observe(runId: string): AsyncIterable<InterviewEvent>;
 }

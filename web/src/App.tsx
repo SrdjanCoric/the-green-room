@@ -104,7 +104,20 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     [store, patchHistory],
   );
 
-  const interview = useInterview(interviewClient, handleCompleted);
+  const interview = useInterview(interviewClient, handleCompleted, store);
+
+  // A reload that lands on an interview route rejoins that run's in-flight stream
+  // (the session snapshot restores the transcript; the stream rebuilds the current
+  // turn). Only a run the history still holds as live is worth rejoining — anything
+  // else falls through to the normal routes. Fires once, on mount.
+  const rejoinedRef = useRef(false);
+  useEffect(() => {
+    if (rejoinedRef.current) return;
+    rejoinedRef.current = true;
+    if (route.name !== 'interview' || interview.state.runId) return;
+    const entry = history.find((e) => e.runId === route.runId);
+    if (entry?.status === 'live') interview.reconnect(route.runId);
+  });
 
   // Show the notes once the run has finished — but if the candidate is watching the
   // interview scene mid-goodbye, hold the curtain until the line finishes typing.
@@ -190,13 +203,14 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
       navigate({ name: interview.state.phase === 'report' ? 'report' : 'interview', runId: entry.runId });
       return;
     }
-    // A live run from another session can't be reconnected yet (durable reconnect is a
-    // deferred enhancement); say so rather than silently dropping to a blank setup.
-    setPrepError(
-      entry.status === 'live'
-        ? "That interview is still in progress from another session and can't be reopened here yet."
-        : 'That interview is no longer available.',
-    );
+    // A live run from an earlier page load: rejoin its in-flight stream where it
+    // left off rather than restarting it (or refusing).
+    if (entry.status === 'live') {
+      interview.reconnect(entry.runId);
+      navigate({ name: 'interview', runId: entry.runId });
+      return;
+    }
+    setPrepError('That interview is no longer available.');
     navigate({ name: 'setup' });
   }
 
