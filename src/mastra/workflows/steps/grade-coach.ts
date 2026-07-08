@@ -175,9 +175,12 @@ export async function readPriorSessions(params: {
 
 /**
  * Distill the coached session and upsert it into the candidate's ledger. Reads the
- * stored record fresh (rather than reusing the pre-coach read) so a concurrent
- * session's entry is not clobbered, and upserts by `runId` so a `recoach` replay
- * updates its own entry instead of double-appending.
+ * stored record fresh (rather than reusing the pre-coach read) to shrink the window
+ * in which another session's write could be overwritten, and upserts by `runId` so a
+ * `recoach` replay updates its own entry instead of double-appending. This is still a
+ * plain read-modify-write: two sessions for the same candidate finishing at the same
+ * moment can drop one ledger entry. Acceptable for the single-operator setup; true
+ * concurrency safety needs storage-level compare-and-swap.
  */
 export async function recordSessionInLedger(params: {
   memory: CandidateLedgerStore;
@@ -235,19 +238,30 @@ export function createGradeStep(options: { grader?: StructuredGenerator } = {}) 
 /** The production grade step, backed by the registered grader agent. */
 export const gradeStep = createGradeStep();
 
-export function createCoachStep(options: { coach?: StructuredGenerator } = {}) {
+export function createCoachStep(
+  options: { coach?: StructuredGenerator; memory?: CandidateLedgerStore } = {},
+) {
   return createStep({
     id: 'coach',
     inputSchema: gradedInterviewStateSchema,
     outputSchema: coachedInterviewStateSchema,
     execute: async ({ inputData, mastra, requestContext, runId }) => {
       const ledgerKey = {
-        memory: candidateMemory,
+        memory: options.memory ?? candidateMemory,
         candidateId: inputData.candidateId,
         threadId: inputData.threadId,
         runId,
       };
-      const priorSessions = await readPriorSessions(ledgerKey);
+      // Prior sessions are optional prompt garnish: like the ledger write below, a
+      // storage fault here must not fail a finished interview.
+      let priorSessions: SessionSummary[] = [];
+      try {
+        priorSessions = await readPriorSessions(ledgerKey);
+      } catch (error) {
+        mastra.getLogger()?.warn('Could not read prior sessions; coaching without history.', {
+          error,
+        });
+      }
 
       const coach = options.coach ?? mastra.getAgent('coach');
       const coaching = await createCoachReporter(coach, requestContext)(

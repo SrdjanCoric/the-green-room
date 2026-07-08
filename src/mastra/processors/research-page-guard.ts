@@ -53,28 +53,35 @@ export function createResearchPageGuard(options: ResearchPageGuardOptions): Inpu
     name: 'Research Page Guard',
     async processInputStep(args: ProcessInputStepArgs): Promise<MastraDBMessage[] | undefined> {
       const scanned = readScannedIds(args.state);
-      let changed = false;
-
-      const nextMessages: MastraDBMessage[] = [];
-      for (const message of args.messages) {
-        const pages = unscannedResearchPages(message, scanned);
-        if (pages.length === 0) {
-          nextMessages.push(message);
-          continue;
-        }
-
-        let current = message;
-        for (const page of pages) {
+      const jobs: { messageIndex: number; page: ResearchPage }[] = [];
+      args.messages.forEach((message, messageIndex) => {
+        for (const page of unscannedResearchPages(message, scanned)) {
           scanned.add(page.toolCallId);
-          const safeText = await scanPageText(detector, page, args.abort);
-          if (safeText === page.text) continue;
-          current = withResultText(current, page.toolCallId, safeText);
-          changed = true;
+          jobs.push({ messageIndex, page });
         }
-        nextMessages.push(current);
-      }
-
+      });
       args.state[SCANNED_STATE_KEY] = [...scanned];
+      if (jobs.length === 0) return undefined;
+
+      // Pages are independent, so they scan concurrently — one detector call each,
+      // not one full round trip per page in series.
+      const verdicts = await Promise.all(
+        jobs.map(({ page }) => scanPage(detector, page, args.abort)),
+      );
+
+      let changed = false;
+      const nextMessages = [...args.messages];
+      jobs.forEach(({ messageIndex, page }, jobIndex) => {
+        const verdict = verdicts[jobIndex];
+        if (!verdict || verdict.clean) return;
+        nextMessages[messageIndex] = withSafeResult(
+          nextMessages[messageIndex]!,
+          page.toolCallId,
+          verdict.text,
+          safeOrigin(page.url),
+        );
+        changed = true;
+      });
       return changed ? nextMessages : undefined;
     },
   };
@@ -83,6 +90,8 @@ export function createResearchPageGuard(options: ResearchPageGuardOptions): Inpu
 interface ResearchPage {
   toolCallId: string;
   text: string;
+  /** The final URL the fetch landed on — attacker-influenceable via redirects. */
+  url?: string;
 }
 
 function readScannedIds(state: Record<string, unknown>): Set<string> {
@@ -103,33 +112,61 @@ function unscannedResearchPages(message: MastraDBMessage, scanned: Set<string>):
     if (!result || typeof result !== 'object' || typeof (result as { text?: unknown }).text !== 'string') {
       continue;
     }
-    pages.push({ toolCallId: invocation.toolCallId, text: (result as { text: string }).text });
+    const url = (result as { url?: unknown }).url;
+    pages.push({
+      toolCallId: invocation.toolCallId,
+      text: (result as { text: string }).text,
+      ...(typeof url === 'string' ? { url } : {}),
+    });
   }
   return pages;
 }
 
 /**
- * Run one page through the detector. The page text travels inside a synthetic text
- * message because the built-in detector reads and rewrites text parts only; the verdict
- * is carried back as plain text and re-seated in the tool result by the caller.
+ * The scanned surface: the page text together with the final URL it came from. A
+ * redirect can plant instructions in the URL's path or query, so both channels travel
+ * through the detector as one text.
  */
-async function scanPageText(
+function pageScanInput(page: ResearchPage): string {
+  return page.url === undefined ? page.text : `Fetched from: ${page.url}\n\n${page.text}`;
+}
+
+/** Collapse a flagged page's URL to its origin, so nothing rider-shaped survives in it. */
+function safeOrigin(url: string | undefined): string | undefined {
+  if (url === undefined) return undefined;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Run one page through the detector. The scan surface travels inside a synthetic text
+ * message because the built-in detector reads and rewrites text parts only; a verdict
+ * that differs from the input is carried back and re-seated in the tool result by the
+ * caller (a clean page keeps its original text and URL untouched).
+ */
+async function scanPage(
   detector: PageInjectionScanner,
   page: ResearchPage,
   abort: (reason?: string) => never,
-): Promise<string> {
+): Promise<{ clean: boolean; text: string }> {
+  const scanInput = pageScanInput(page);
   const synthetic: MastraDBMessage = {
     id: `${RESEARCH_PAGE_GUARD_ID}:${page.toolCallId}`,
     role: 'user',
     createdAt: new Date(),
-    content: { format: 2, parts: [{ type: 'text', text: page.text }] },
+    content: { format: 2, parts: [{ type: 'text', text: scanInput }] },
   };
 
   const verdict = await detector.processInput({ messages: [synthetic], abort });
   const returned = verdict[0];
   // In rewrite mode the detector filters only when it has no rewrite to offer.
-  if (!returned) return WITHHELD_PAGE_TEXT;
-  return extractText(returned) ?? WITHHELD_PAGE_TEXT;
+  if (!returned) return { clean: false, text: WITHHELD_PAGE_TEXT };
+  const text = extractText(returned);
+  if (text === undefined) return { clean: false, text: WITHHELD_PAGE_TEXT };
+  return text === scanInput ? { clean: true, text: page.text } : { clean: false, text };
 }
 
 function extractText(message: MastraDBMessage): string | undefined {
@@ -139,12 +176,14 @@ function extractText(message: MastraDBMessage): string | undefined {
   return typeof message.content.content === 'string' ? message.content.content : undefined;
 }
 
-/** Copy a message with one tool result's text replaced, everything else intact. */
-function withResultText(
+/** Copy a message with one tool result's text (and, when given, URL) replaced, everything else intact. */
+function withSafeResult(
   message: MastraDBMessage,
   toolCallId: string,
   text: string,
+  url: string | undefined,
 ): MastraDBMessage {
+  const replacement = { text, ...(url !== undefined ? { url } : {}) };
   return {
     ...message,
     content: {
@@ -155,7 +194,7 @@ function withResultText(
         }
         const result = part.toolInvocation.result;
         const nextResult =
-          result && typeof result === 'object' ? { ...result, text } : { text };
+          result && typeof result === 'object' ? { ...result, ...replacement } : replacement;
         return { ...part, toolInvocation: { ...part.toolInvocation, result: nextResult } };
       }),
     },

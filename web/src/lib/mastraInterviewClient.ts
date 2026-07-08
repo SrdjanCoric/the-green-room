@@ -41,7 +41,7 @@ export function createMastraInterviewClient(
     try {
       return (await workflow.runById(runId, {
         fields: OUTCOME_FIELDS,
-      })) as unknown as WorkflowOutcome;
+      })) as WorkflowOutcome;
     } catch {
       return undefined;
     }

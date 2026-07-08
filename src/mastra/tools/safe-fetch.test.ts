@@ -31,6 +31,8 @@ describe('isGlobalIp', () => {
       '0:0:0:0:0:ffff:10.0.0.1', // expanded IPv4-mapped
       '::ffff:192.168.1.1', // dotted IPv4-mapped
       '64:ff9b::a00:1', // NAT64 embedding 10.0.0.1
+      '64:ff9b:1::7f00:1', // RFC 8215 local-use NAT64 (v4 position varies; whole /48 is non-global)
+      '64:ff9b:1:ffff::203.0.113.9', // local-use NAT64, dotted form, high end of the /48
       '2002:7f00:1::', // 6to4 embedding 127.0.0.1
       '2002:a9fe:a9fe::', // 6to4 embedding 169.254.169.254
     ]) {

@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { RequestContext } from '@mastra/core/request-context';
 import { z } from 'zod';
 
-import { structuredCall, textCall, type StructuredGenerator, type TextGenerator } from './structured-call';
+import {
+  structuredCall,
+  textCall,
+  type GenerateToolHooks,
+  type StructuredGenerator,
+  type TextGenerator,
+} from './structured-call';
 
 const shapeSchema = z.object({ name: z.string(), count: z.number().int() });
 
@@ -144,6 +150,34 @@ describe('structuredCall extras', () => {
     expect(seen[0]?.maxSteps).toBe(4);
     expect(seen[0]?.hooks).toBe(hooks);
     expect(seen[0]?.abortSignal).toBe(controller.signal);
+  });
+
+  it('builds fresh hooks per attempt when given a factory, so per-call budgets reset on retry', async () => {
+    const built: GenerateToolHooks[] = [];
+    const received: (GenerateToolHooks | undefined)[] = [];
+    let attempt = 0;
+    const agent: StructuredGenerator = {
+      async generate(_prompt, options) {
+        received.push(options.hooks);
+        attempt += 1;
+        // First reply violates the schema, forcing a retry with new hooks.
+        return { object: attempt === 1 ? { name: 'incomplete' } : { name: 'a', count: 1 } };
+      },
+    };
+    const hooksFactory = (): GenerateToolHooks => {
+      const hooks = { beforeToolCall: () => undefined };
+      built.push(hooks);
+      return hooks;
+    };
+
+    await structuredCall(agent, 'extract things', shapeSchema, new RequestContext(), {
+      description: 'researcher',
+      hooks: hooksFactory,
+    });
+
+    expect(built).toHaveLength(2);
+    expect(received).toEqual(built);
+    expect(received[0]).not.toBe(received[1]);
   });
 });
 

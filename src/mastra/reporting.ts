@@ -38,12 +38,18 @@ function inlineText(value: string): string {
 }
 
 // Neutralize a multi-line prose block by escaping a leading Markdown structural token on
-// each line, so injected text can never forge a heading, block quote, or list while the
-// prose still reads normally.
+// each line — ATX headings, block quotes, lists, setext underlines (a `===`/`---` line
+// promotes the line above it to a heading), code-fence openers, and raw HTML — so
+// injected text can never forge trusted-looking report structure while the prose still
+// reads normally.
 function neutralizeMarkdown(text: string): string {
   return text
     .split('\n')
-    .map((line) => line.replace(/^(\s*)([#>]|[-*+](?=\s)|\d+\.(?=\s))/, '$1\\$2'))
+    .map((line) =>
+      line
+        .replace(/^(\s*)([#>]|[-*+](?=\s)|\d+\.(?=\s)|`{3,}|~{3,}|<)/, '$1\\$2')
+        .replace(/^(\s*)(=+|-+)(\s*)$/, '$1\\$2$3'),
+    )
     .join('\n');
 }
 

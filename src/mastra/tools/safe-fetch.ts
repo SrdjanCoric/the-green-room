@@ -316,6 +316,10 @@ function isGlobalIpv6(ip: string): boolean {
 
   const first = hextets[0] ?? 0;
   const second = hextets[1] ?? 0;
+  const third = hextets[2] ?? 0;
+  // RFC 8215 local-use NAT64 (64:ff9b:1::/48): the embedded v4's position varies with
+  // the deployed prefix length, so classify the whole block as non-global.
+  if (first === 0x0064 && second === 0xff9b && third === 0x0001) return false;
   if ((first & 0xffc0) === 0xfe80) return false; // link-local fe80::/10
   if ((first & 0xffc0) === 0xfec0) return false; // deprecated site-local fec0::/10
   if ((first & 0xfe00) === 0xfc00) return false; // unique local fc00::/7

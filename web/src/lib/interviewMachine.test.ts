@@ -102,4 +102,24 @@ describe('interviewReducer', () => {
     expect(state.phase).toBe('error');
     expect(state.error).toBe('Run failed.');
   });
+
+  it('holds a failed turn as retryable rather than dead, then retries it', () => {
+    let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'run-1' });
+    state = interviewReducer(state, {
+      type: 'EVENT',
+      event: {
+        type: 'suspended',
+        suspend: { kind: 'failure', reason: 'The assessor call failed.' },
+      },
+    });
+
+    // The turn failed but the run is alive: recoverable phase, reason shown, no report.
+    expect(state.phase).toBe('turnFailed');
+    expect(state.error).toBe('The assessor call failed.');
+
+    state = interviewReducer(state, { type: 'RETRY' });
+    expect(state.phase).toBe('assessing');
+    expect(state.error).toBeNull();
+    expect(state.cue).toMatch(/retry/i);
+  });
 });

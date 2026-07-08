@@ -45,10 +45,15 @@ export interface InterviewReport {
 /** How the setup form presented the posting: a link to fetch, or literal pasted text. */
 export type PostingInputKind = 'link' | 'paste';
 
-/** What the workflow suspended to ask for: a behavioural question, or the target level. */
+/**
+ * What the workflow suspended for: a behavioural question, the target level, or a
+ * failed turn held open for a retry (the run is alive; resuming with `{ retry: true }`
+ * re-runs the turn).
+ */
 export type SuspendPayload =
   | { kind: 'question'; question: string; questionNumber: number }
-  | { kind: 'level'; prompt: string };
+  | { kind: 'level'; prompt: string }
+  | { kind: 'failure'; reason: string };
 
 /**
  * A domain event yielded by an {@link InterviewClient} as a run streams. The React
@@ -95,6 +100,9 @@ export interface StartInterviewInput {
 export interface InterviewClient {
   /** Start a run and stream toward the first suspend (a question or the level prompt). */
   start(input: StartInterviewInput): { runId: string; events: AsyncIterable<InterviewEvent> };
-  /** Resume a suspended run with the candidate's answer (or chosen level) and keep streaming. */
-  resume(runId: string, resumeData: { answer: string } | { level: string }): AsyncIterable<InterviewEvent>;
+  /** Resume a suspended run — with an answer, a level, or a failed-turn retry — and keep streaming. */
+  resume(
+    runId: string,
+    resumeData: { answer: string } | { level: string } | { retry: true },
+  ): AsyncIterable<InterviewEvent>;
 }

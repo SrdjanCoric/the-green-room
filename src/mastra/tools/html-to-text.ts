@@ -6,7 +6,7 @@ export function htmlToText(html: string): string {
     .replace(/<!--[\s\S]*?-->/g, ' ');
   const withBreaks = withoutNoise
     .replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|footer)>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n');
+    .replace(/<br\b[^>]*>/gi, '\n');
   const stripped = withBreaks.replace(/<[^>]+>/g, ' ');
   return decodeEntities(stripped)
     .replace(/[^\S\n]+/g, ' ')

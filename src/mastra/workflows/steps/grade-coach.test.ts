@@ -6,12 +6,17 @@ import { candidateMemory } from '../../memory';
 import {
   buildCoachPrompt,
   createCoachReporter,
+  createCoachStep,
   createSessionGrader,
   readPriorSessions,
   recordSessionInLedger,
 } from './grade-coach';
+import { DEFAULT_CAP_LIMITS } from '../../interview/interview-caps';
+import { candidateProfileSchema } from '../../schemas/candidate-profile';
+import { EMPTY_COMPANY_BRIEF } from '../../schemas/company-brief';
 import { roleContextSchema } from '../../schemas/role-context';
 import { coachReportSchema, sessionGradeSchema } from '../../schemas/coach-report';
+import { gradedInterviewStateSchema } from '../interview-state';
 
 describe('createSessionGrader', () => {
   const requestContext = new RequestContext();
@@ -418,5 +423,75 @@ describe('coaching-ledger read/write through working memory', () => {
         coaching,
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('coach step ledger degradation', () => {
+  it('still delivers the coaching when the ledger store is down, logging warnings instead', async () => {
+    const warn = vi.fn();
+    const downMemory = {
+      getWorkingMemory: async (): Promise<string | null> => {
+        throw new Error('storage offline');
+      },
+      updateWorkingMemory: async (): Promise<void> => {
+        throw new Error('storage offline');
+      },
+    };
+    const coaching = coachReportSchema.parse({
+      summary: 'Coached without history.',
+      answerAdvice: [
+        { question: 'Q1', diagnosis: 'Thin on outcomes.', fix: 'End on the number.' },
+      ],
+      drills: [],
+      studyPlan: 'Quantify one story.',
+    });
+
+    const inputData = gradedInterviewStateSchema.parse({
+      profile: candidateProfileSchema.parse({ name: 'Ada Lovelace' }),
+      roleContext: roleContextSchema.parse({ role: 'Staff Engineer' }),
+      candidateId: 'candidate-degrade',
+      candidateIdOrigin: 'default',
+      threadId: 'thread-degrade',
+      researchUrls: [],
+      companyBrief: EMPTY_COMPANY_BRIEF,
+      limits: DEFAULT_CAP_LIMITS,
+      targetLevel: 'senior',
+      coverage: {},
+      done: true,
+      transcript: [{ question: 'Q1', answer: 'An answer.' }],
+      closingMessage: 'Thanks.',
+      grade: sessionGradeSchema.parse({
+        scores: [
+          {
+            question: 'Q1',
+            turnIndex: 0,
+            rationale: 'Solid.',
+            star: { situation: true, task: true, action: true, result: true, quantifiedResult: false },
+            specificity: 'medium',
+            ownership: 'clear',
+            weakOrMissing: ['a measured result'],
+            gap: 'Quantify the outcome.',
+            score: 3,
+          },
+        ],
+        skipped: [],
+      }),
+    });
+
+    const step = createCoachStep({
+      coach: { generate: async () => ({ object: coaching }) },
+      memory: downMemory,
+    });
+    const result = await step.execute({
+      inputData,
+      mastra: { getLogger: () => ({ warn }) },
+      requestContext: new RequestContext(),
+      runId: 'run-degrade',
+    } as unknown as Parameters<typeof step.execute>[0]);
+
+    // Both the prior-sessions read and the ledger write faulted; neither may cost
+    // the candidate their finished coaching.
+    expect((result as { coaching: unknown }).coaching).toEqual(coaching);
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });

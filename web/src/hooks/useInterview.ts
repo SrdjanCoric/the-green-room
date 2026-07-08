@@ -23,6 +23,8 @@ export interface UseInterview {
   submitAnswer: (answer: string) => void;
   /** Choose the target level when the run suspended to ask for it. */
   submitLevel: (level: string) => void;
+  /** Re-run a failed turn when the run suspended with a failure payload. */
+  retry: () => void;
 }
 
 /**
@@ -85,5 +87,12 @@ export function useInterview(client: InterviewClient, onCompleted?: OnCompleted)
     [client, consume],
   );
 
-  return { state, start, submitAnswer, submitLevel };
+  const retry = useCallback(() => {
+    const runId = runIdRef.current;
+    if (!runId) return;
+    dispatch({ type: 'RETRY' });
+    void consume(client.resume(runId, { retry: true }));
+  }, [client, consume]);
+
+  return { state, start, submitAnswer, submitLevel, retry };
 }
