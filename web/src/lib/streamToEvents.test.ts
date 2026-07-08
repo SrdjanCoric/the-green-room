@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { StreamChunk } from './chunkInterpreter';
+import { initialInterviewState, interviewReducer, type InterviewState } from './interviewMachine';
 import { streamToEvents } from './streamToEvents';
 import type { InterviewEvent } from './types';
 import type { WorkflowOutcome } from './readOutcome';
@@ -96,6 +97,39 @@ describe('streamToEvents', () => {
       { type: 'cue', label: 'Researching the company' },
       { type: 'suspended', suspend: { kind: 'level', prompt: 'What level?' } },
     ]);
+  });
+
+  it('rebuilds a rejoined stream without duplicating or dropping content', async () => {
+    // The shape an observed (rejoined) stream actually has: a stray tail of cached
+    // chunks past the client's offset, then the server re-plays the in-flight segment
+    // from its start — `workflow-start`, the step cue, `text-start`, every token —
+    // before continuing live. Rendering must come out exactly once.
+    const observed: StreamChunk[] = [
+      // History tail: a mid-segment token with no step context (the interpreter has
+      // no active section yet, so it must not render).
+      { from: 'AGENT', type: 'text-delta', payload: { text: 'stale tail ' } },
+      // Segment replay from the top.
+      { from: 'WORKFLOW', type: 'workflow-start', payload: { workflowId: 'interviewWorkflow' } },
+      { from: 'WORKFLOW', type: 'workflow-step-start', payload: { currentStep: { id: 'interviewTurn' } } },
+      { from: 'AGENT', type: 'text-start', payload: {} },
+      { from: 'AGENT', type: 'text-delta', payload: { text: 'Walk me ' } },
+      { from: 'AGENT', type: 'text-delta', payload: { text: 'through it.' } },
+    ];
+    const outcome: WorkflowOutcome = {
+      status: 'suspended',
+      suspendPayload: { kind: 'question', question: 'Walk me through it.', questionNumber: 3 },
+    };
+
+    const events = await collect(streamToEvents(fromArray(observed), async () => outcome));
+
+    // Reduce the events as the screen would: the reloaded page restored a snapshot
+    // holding partial text — the replay must replace it, not append to it.
+    let state: InterviewState = { ...initialInterviewState, runId: 'r', currentQuestion: 'Walk me thr' };
+    for (const event of events) state = interviewReducer(state, { type: 'EVENT', event });
+
+    expect(state.currentQuestion).toBe('Walk me through it.');
+    expect(state.currentQuestionNumber).toBe(3);
+    expect(state.phase).toBe('awaitingAnswer');
   });
 
   it('settles from the authoritative outcome even when the stream never closes', async () => {

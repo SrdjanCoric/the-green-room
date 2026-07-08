@@ -37,7 +37,12 @@ export interface AppProps {
 
 export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
   const store = storage ?? window.localStorage;
-  const interviewClient = useMemo(() => client ?? createMastraInterviewClient(), [client]);
+  // The production client shares the injected storage, so its run bookkeeping and
+  // the hook's session snapshots always live (and are cleared) in the same place.
+  const interviewClient = useMemo(
+    () => client ?? createMastraInterviewClient(undefined, store),
+    [client, store],
+  );
 
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
   const [history, setHistory] = useState<RunHistoryEntry[]>(() => loadHistory(store));
@@ -104,7 +109,39 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     [store, patchHistory],
   );
 
-  const interview = useInterview(interviewClient, handleCompleted);
+  // A run that settles in a hard error stops claiming to be live in the playbill;
+  // reopening it retries the reconnect (the failure may have been the connection).
+  const handleFailed = useCallback(
+    (runId: string) => patchHistory(runId, { status: 'failed' }),
+    [patchHistory],
+  );
+
+  // Every rejoin — playbill click, page load, or the hook's own online-event
+  // recovery — makes the run live again, so a later reload still finds it rejoinable.
+  const handleReconnected = useCallback(
+    (runId: string) => patchHistory(runId, { status: 'live' }),
+    [patchHistory],
+  );
+
+  const interview = useInterview(interviewClient, {
+    onCompleted: handleCompleted,
+    onFailed: handleFailed,
+    onReconnected: handleReconnected,
+    storage: store,
+  });
+
+  // A reload that lands on an interview route rejoins that run's in-flight stream
+  // (the session snapshot restores the transcript; the stream rebuilds the current
+  // turn). Only a run the history still holds as live is worth rejoining — anything
+  // else falls through to the normal routes. Fires once, on mount.
+  const rejoinedRef = useRef(false);
+  useEffect(() => {
+    if (rejoinedRef.current) return;
+    rejoinedRef.current = true;
+    if (route.name !== 'interview' || interview.state.runId) return;
+    const entry = history.find((e) => e.runId === route.runId);
+    if (entry?.status === 'live') interview.reconnect(route.runId);
+  });
 
   // Show the notes once the run has finished — but if the candidate is watching the
   // interview scene mid-goodbye, hold the curtain until the line finishes typing.
@@ -177,6 +214,12 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     }
   }
 
+  function rejoin(runId: string) {
+    // reconnect() reports back through onReconnected, which marks the run live.
+    interview.reconnect(runId);
+    navigate({ name: 'interview', runId });
+  }
+
   function openEntry(entry: RunHistoryEntry) {
     if (entry.status === 'done') {
       const cached = loadCachedReport(store, entry.runId);
@@ -187,16 +230,23 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
       }
     }
     if (entry.runId === interview.state.runId) {
+      // The active run — but if its stream died, clicking it retries the reconnect
+      // instead of re-showing the error screen.
+      if (interview.state.phase === 'error' && entry.status !== 'done') {
+        rejoin(entry.runId);
+        return;
+      }
       navigate({ name: interview.state.phase === 'report' ? 'report' : 'interview', runId: entry.runId });
       return;
     }
-    // A live run from another session can't be reconnected yet (durable reconnect is a
-    // deferred enhancement); say so rather than silently dropping to a blank setup.
-    setPrepError(
-      entry.status === 'live'
-        ? "That interview is still in progress from another session and can't be reopened here yet."
-        : 'That interview is no longer available.',
-    );
+    // A live run from an earlier page load rejoins its in-flight stream where it
+    // left off; a failed one gets the reconnect retried (the failure may have been
+    // transient — the run's durable state decides).
+    if (entry.status === 'live' || entry.status === 'failed') {
+      rejoin(entry.runId);
+      return;
+    }
+    setPrepError('That interview is no longer available.');
     navigate({ name: 'setup' });
   }
 

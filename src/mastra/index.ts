@@ -14,6 +14,7 @@ import { KNOWLEDGE_VECTOR_STORE_NAME } from './knowledge/config';
 import { knowledgeVectorStore } from './knowledge/vector-store';
 import { prepareInterviewRoute } from './server/prepare-interview-route';
 import { storage } from './storage';
+import { streamReplayCache } from './stream-cache';
 import { interviewWorkflow } from './workflows/interview-workflow';
 
 /**
@@ -45,6 +46,13 @@ export const mastra = new Mastra({
   workflows: { interviewWorkflow },
   vectors: { [KNOWLEDGE_VECTOR_STORE_NAME]: knowledgeVectorStore },
   storage,
+  // Backs resumable streaming: the server caches delivered workflow stream chunks by
+  // run id and replays them through its observe endpoint, so a browser that dropped
+  // mid-stream can rejoin the same run where it left off. The observe endpoint (like
+  // the run endpoints generally) has no per-user authorization — run ids are
+  // unguessable UUIDs and this server is assumed to stay on localhost for a single
+  // user; gate the workflow run routes before ever binding it beyond that.
+  cache: streamReplayCache,
   observability,
   logger: new PinoLogger({ name: 'interview-coach', level: 'info' }),
   // Additive route the browser client calls to persist the uploaded CV and resolve
