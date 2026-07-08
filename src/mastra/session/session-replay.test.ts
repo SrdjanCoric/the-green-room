@@ -152,7 +152,7 @@ const mastra = new Mastra({
 });
 
 function handle(): InterviewWorkflowHandle {
-  return mastra.getWorkflow('regradeWorkflow') as unknown as InterviewWorkflowHandle;
+  return mastra.getWorkflow('regradeWorkflow') as InterviewWorkflowHandle;
 }
 
 const requestContext = buildModelRequestContext(resolveModelTiers({}));

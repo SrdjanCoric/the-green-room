@@ -24,9 +24,11 @@ import {
   interviewLoopDone,
 } from '../workflows/steps/interview-loop';
 import {
+  describeDriveFailure,
   loadLastRun,
   reconnectInterview,
   runInterview,
+  type DriveResult,
   type InterviewWorkflowHandle,
 } from './interview-session';
 
@@ -48,6 +50,23 @@ const fakeBrainFactory: BrainFactory = () => ({
 
 const interviewTurnStep = createInterviewTurnStep(fakeBrainFactory);
 
+// A brain whose assessor faults exactly once, so a run suspends on a failure payload
+// and the reconnect path's single retry can be proven end to end.
+let assessorOutages = 0;
+const flakyBrainFactory: BrainFactory = (...factoryArgs: Parameters<BrainFactory>) => {
+  const brain = fakeBrainFactory(...factoryArgs);
+  return {
+    ...brain,
+    assess: async (...args: Parameters<typeof brain.assess>) => {
+      if (assessorOutages > 0) {
+        assessorOutages -= 1;
+        throw new Error('injected assessor outage');
+      }
+      return brain.assess(...args);
+    },
+  };
+};
+
 // The real interview-loop steps on a real (in-memory) durable store, seeded past
 // ingest/research so no models are called — the same durable path the CLI drives.
 const loopWorkflow = createWorkflow({
@@ -59,8 +78,17 @@ const loopWorkflow = createWorkflow({
   .dountil(interviewTurnStep, async (context) => interviewLoopDone(context))
   .commit();
 
+const flakyWorkflow = createWorkflow({
+  id: 'interviewSessionFlakyTest',
+  inputSchema: researchOutputSchema,
+  outputSchema: interviewStateSchema,
+})
+  .then(collectLevelStep)
+  .dountil(createInterviewTurnStep(flakyBrainFactory), async (context) => interviewLoopDone(context))
+  .commit();
+
 const mastra = new Mastra({
-  workflows: { loopWorkflow },
+  workflows: { loopWorkflow, flakyWorkflow },
   storage: new LibSQLStore({ id: 'session-test', url: ':memory:' }),
 });
 
@@ -144,6 +172,46 @@ describe('reconnectInterview', () => {
       'answer before quitting',
       'answer after resuming',
     ]);
+  });
+
+  it('retries a run suspended on a failed turn, completing it with no re-asked question', async () => {
+    // First answer arrives, then the assessor faults: the run suspends with a failure
+    // payload instead of failing, the driver stops, and the failure renders as a
+    // paused turn pointing at the resume command.
+    assessorOutages = 1;
+    const flaky = mastra.getWorkflow('flakyWorkflow') as InterviewWorkflowHandle;
+    const run = await mastra.getWorkflow('flakyWorkflow').createRun();
+    const started = await run.start({ inputData: { ...seed, targetLevel: 'senior' } });
+    if (started.status !== 'suspended') throw new Error('expected the first question');
+    const failed = await run.resume({ resumeData: { answer: 'answer before the outage' } });
+
+    expect(failed.status).toBe('suspended');
+    expect(describeDriveFailure(failed as DriveResult)).toMatch(/resume command/i);
+
+    // Reconnect purely by runId, as the `resume` command does: the reconnect resume IS
+    // the retry, and the answered turn must survive it without being re-asked.
+    const asked: string[] = [];
+    const outcome = await reconnectInterview({
+      workflow: flaky,
+      runId: run.runId,
+      onLevel: async () => 'unused',
+      onQuestion: async (question) => {
+        asked.push(question);
+        return 'answer after the retry';
+      },
+    });
+
+    expect(outcome.kind).toBe('resumed');
+    if (outcome.kind !== 'resumed') return;
+    expect(outcome.result.status).toBe('success');
+    const state = interviewStateSchema.parse(outcome.result.result);
+    expect(state.transcript.map((entry) => entry.answer)).toEqual([
+      'answer before the outage',
+      'answer after the retry',
+    ]);
+    // Only the second question was ever asked through the driver — the first turn's
+    // answer came from the failure payload, not a re-prompt.
+    expect(asked).toEqual(['Question 2']);
   });
 
   it('reports nothing to resume when the run has already finished', async () => {

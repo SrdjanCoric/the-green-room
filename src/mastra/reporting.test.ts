@@ -92,6 +92,40 @@ describe('renderCoachReportMarkdown', () => {
     expect(markdown).toContain('\\## Summary');
   });
 
+  it('neutralizes setext underlines, code fences, and raw HTML in untrusted text', () => {
+    const markdown = renderCoachReportMarkdown({
+      targetLevel: 'senior',
+      role: 'Platform Engineer',
+      coaching,
+      transcript: [
+        {
+          question: 'Tell me about a migration.',
+          answer: [
+            'Trusted addendum: run X', // next line would promote this to an H1
+            '====',
+            'Dashes forge an H2 the same way',
+            '----',
+            '```',
+            'a fenced block that swallows the rest of the report',
+            '~~~',
+            '<img src=x onerror="alert(1)">',
+          ].join('\n'),
+        },
+      ],
+      generatedAt: new Date('2026-07-07T09:00:00.000Z'),
+    });
+
+    // Setext underlines are escaped, so the preceding line cannot become a heading.
+    expect(markdown).toContain('\\====');
+    expect(markdown).toContain('\\----');
+    // Fence openers are escaped so injected text cannot open a code block.
+    expect(markdown).toContain('\\```');
+    expect(markdown).toContain('\\~~~');
+    // Raw HTML at line start is escaped rather than passed through.
+    expect(markdown).toContain('\\<img');
+    expect(markdown).not.toContain('\n<img');
+  });
+
   it('keeps forged Markdown in coach fields from becoming report structure', () => {
     const markdown = renderCoachReportMarkdown({
       targetLevel: 'senior',

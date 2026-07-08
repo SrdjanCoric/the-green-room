@@ -62,6 +62,17 @@ function readSuspend(outcome: WorkflowOutcome): SuspendPayload | null {
       questionNumber: typeof payload.questionNumber === 'number' ? payload.questionNumber : 1,
     };
   }
+  // A failed turn suspends instead of failing the run, so it is terminal for polling
+  // and the screen can offer a retry (resume with `{ retry: true }`).
+  if (payload.kind === 'failure') {
+    return {
+      kind: 'failure',
+      reason:
+        typeof payload.reason === 'string' && payload.reason
+          ? payload.reason
+          : 'The last turn failed.',
+    };
+  }
   return null;
 }
 

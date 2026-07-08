@@ -77,7 +77,9 @@ export function createResearchBriefBuilder(
     structuredCall(agent, buildResearchPrompt(input), companyBriefSchema, requestContext, {
       description: 'research agent',
       maxSteps: RESEARCH_FETCH_BUDGET + 1,
-      hooks: createResearchFetchBudgetHooks(),
+      // A factory, not an instance: each validation-retry attempt gets a fresh fetch
+      // budget, matching the prompt's "use at most N fetches" per generate call.
+      hooks: () => createResearchFetchBudgetHooks(),
       abortSignal: options?.abortSignal,
     });
 }

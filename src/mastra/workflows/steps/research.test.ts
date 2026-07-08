@@ -178,20 +178,25 @@ describe('buildCompanyBrief', () => {
     expect(brief).toEqual(EMPTY_COMPANY_BRIEF);
   });
 
-  it('returns an empty brief when the posting-channel injection guard blocks the call', async () => {
+  it('surfaces an injection-guard block in the log while degrading to the empty brief', async () => {
     // The research agent's `processInput` detector aborts the whole call in block mode
     // (a tripwire error thrown out of `generate`); the step degrades to the empty brief
-    // rather than failing the run. Fetched-page injections never reach this path — the
-    // step-phase page guard rewrites them in place and research continues.
+    // rather than failing the run, but the block's cause must reach the operator's log
+    // rather than vanish into the catch-all. Fetched-page injections never reach this
+    // path — the step-phase page guard rewrites them in place and research continues.
+    const warnings: string[] = [];
     const brief = await buildCompanyBrief({
       builder: async () => {
         throw new Error('Prompt injection detected. Types: injection');
       },
       roleContext: roleContextSchema.parse({ company: 'Globex', role: 'Staff Engineer' }),
       researchUrls: ['https://attacker.example/about'],
+      logger: { warn: (message) => warnings.push(message) },
     });
 
     expect(brief).toEqual(EMPTY_COMPANY_BRIEF);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/prompt injection detected/i);
   });
 
   it('returns an empty brief when research times out', async () => {

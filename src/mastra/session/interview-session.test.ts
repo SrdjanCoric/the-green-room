@@ -111,4 +111,21 @@ describe('describeDriveFailure', () => {
     ).toMatch(/unsupported/i);
     expect(describeDriveFailure({ status: 'canceled' })).toMatch(/canceled/i);
   });
+
+  it('renders a failure suspension as a paused turn pointing at the resume command', () => {
+    const message = describeDriveFailure({
+      status: 'suspended',
+      suspendPayload: {
+        interviewTurn: {
+          kind: 'failure',
+          reason: 'The assessor call failed.',
+          stage: 'assessor',
+        },
+      },
+    });
+
+    expect(message).toContain('The assessor call failed.');
+    expect(message).toMatch(/answers saved/i);
+    expect(message).toMatch(/resume command/i);
+  });
 });

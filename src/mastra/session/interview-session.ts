@@ -22,7 +22,9 @@ const lastRunSchema = z.object({
 export type LastRun = z.infer<typeof lastRunSchema>;
 
 /** Default location of the last-run pointer: beside the database under the
- *  project-root `data/` directory, so every entrypoint resumes the same run. */
+ *  project-root `data/` directory, so every entrypoint resumes the same run.
+ *  One global pointer (not per-candidate or per-session) is deliberate — the CLI
+ *  is single-user, and "resume my interrupted interview" has exactly one referent. */
 export function defaultLastRunPath(): string {
   return join(dataDir, 'last-run.json');
 }

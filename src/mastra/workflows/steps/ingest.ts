@@ -49,6 +49,12 @@ const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
  * email address in the raw CV text (deterministic — trimmed and lowercased, never
  * LLM-extracted, because identity must be stable across runs); otherwise the literal
  * `'default'`. Computed right after CV text extraction and carried in workflow state.
+ *
+ * Trust boundary: every input here is client-controlled, so whoever supplies the
+ * `candidate` value (or a CV embedding an email) reads and writes that candidate's
+ * profile and coaching ledger. That is by design for the single-operator local setup;
+ * a multi-tenant deployment must bind runs to a server-issued candidate id instead
+ * (the way `cvPath` is confined to the uploads directory).
  */
 export function resolveCandidateIdentity(params: {
   override?: string;

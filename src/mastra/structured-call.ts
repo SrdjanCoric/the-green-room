@@ -43,8 +43,12 @@ export interface StructuredCallOptions {
   attempts?: number;
   /** Caps the agent's tool-call loop; passed through to `generate`. */
   maxSteps?: number;
-  /** Tool-call hooks passed through to `generate`. */
-  hooks?: GenerateToolHooks;
+  /**
+   * Tool-call hooks passed through to `generate`. Pass a factory when the hooks carry
+   * per-call state (a fetch budget): it is invoked once per attempt, so a validation
+   * retry starts with fresh hooks instead of an already-spent budget.
+   */
+  hooks?: GenerateToolHooks | (() => GenerateToolHooks);
   /** Cancels the underlying call; passed through to `generate`. */
   abortSignal?: AbortSignal;
 }
@@ -154,11 +158,12 @@ export async function structuredCall<Schema extends z.ZodType>(
     description: options.description,
     what: 'structured output',
     attempt: async (currentPrompt) => {
+      const hooks = typeof options.hooks === 'function' ? options.hooks() : options.hooks;
       const result = await agent.generate(currentPrompt, {
         structuredOutput: { schema },
         requestContext,
         ...(options.maxSteps !== undefined ? { maxSteps: options.maxSteps } : {}),
-        ...(options.hooks ? { hooks: options.hooks } : {}),
+        ...(hooks ? { hooks } : {}),
         ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
       });
       if (result.object === undefined) {
