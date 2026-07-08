@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { RequestContext } from '@mastra/core/request-context';
 
 import { candidateMemory } from '../../memory';
+import type { getEmbeddingModel } from '../../knowledge/embedding';
+import { RETRIEVAL_MODEL_CONTEXT_KEY } from '../../tools/coach-retrieval';
 import {
   buildCoachPrompt,
   createCoachReporter,
@@ -11,6 +13,16 @@ import {
   readPriorSessions,
   recordSessionInLedger,
 } from './grade-coach';
+
+/**
+ * A stand-in embedding model for coach-step tests: the fake coach never runs the
+ * retrieval tool, so the value only has to be identity-checkable in the request
+ * context, not a working model. Avoids constructing the real model (which validates
+ * `OPENAI_API_KEY`).
+ */
+function stubEmbeddingModel(): ReturnType<typeof getEmbeddingModel> {
+  return { modelId: 'stub-embedder' } as unknown as ReturnType<typeof getEmbeddingModel>;
+}
 import { DEFAULT_CAP_LIMITS } from '../../interview/interview-caps';
 import { candidateProfileSchema } from '../../schemas/candidate-profile';
 import { EMPTY_COMPANY_BRIEF } from '../../schemas/company-brief';
@@ -501,6 +513,7 @@ describe('coach step ledger degradation', () => {
     const step = createCoachStep({
       coach: { generate: async () => ({ object: coaching }) },
       memory: downMemory,
+      embeddingModel: stubEmbeddingModel(),
     });
     // Structural-by-necessity double cast: the engine's full step context carries many
     // runtime-only fields this step never reads; the fake covers exactly the four it does.
@@ -515,5 +528,131 @@ describe('coach step ledger degradation', () => {
     // the candidate their finished coaching.
     expect((result as { coaching: unknown }).coaching).toEqual(coaching);
     expect(warn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('coach step retrieval-model binding', () => {
+  it('supplies the embedding model through the documented requestContext override before the coach runs', async () => {
+    const embeddingModel = stubEmbeddingModel();
+    let seenModel: unknown;
+
+    const coaching = coachReportSchema.parse({
+      summary: 'A solid first pass with room to sharpen the endings.',
+      answerAdvice: [{ question: 'Q1', diagnosis: 'Thin on outcomes.', fix: 'End on the number.' }],
+      drills: [],
+      studyPlan: 'Quantify one story end to end this week.',
+    });
+    const inputData = gradedInterviewStateSchema.parse({
+      profile: candidateProfileSchema.parse({ name: 'Ada Lovelace' }),
+      roleContext: roleContextSchema.parse({ role: 'Staff Engineer' }),
+      candidateId: 'candidate-bind',
+      candidateIdOrigin: 'default',
+      threadId: 'thread-bind',
+      researchUrls: [],
+      companyBrief: EMPTY_COMPANY_BRIEF,
+      limits: DEFAULT_CAP_LIMITS,
+      targetLevel: 'senior',
+      coverage: {},
+      done: true,
+      transcript: [{ question: 'Q1', answer: 'An answer.' }],
+      closingMessage: 'Thanks.',
+      grade: sessionGradeSchema.parse({
+        scores: [
+          {
+            question: 'Q1',
+            turnIndex: 0,
+            rationale: 'Solid.',
+            star: { situation: true, task: true, action: true, result: true, quantifiedResult: false },
+            specificity: 'medium',
+            ownership: 'clear',
+            weakOrMissing: ['a measured result'],
+            gap: 'Quantify the outcome.',
+            score: 3,
+          },
+        ],
+        skipped: [],
+      }),
+    });
+
+    const step = createCoachStep({
+      coach: {
+        generate: async (_prompt, options) => {
+          // The retrieval tool reads the embedding model off the run's request context
+          // via the documented 'model' key; the step must have set it before this call.
+          seenModel = options.requestContext.get(RETRIEVAL_MODEL_CONTEXT_KEY);
+          return { object: coaching };
+        },
+      },
+      memory: {
+        getWorkingMemory: async () => null,
+        updateWorkingMemory: async () => {
+          /* no ledger assertion in this test */
+        },
+      },
+      embeddingModel,
+    });
+
+    await step.execute({
+      inputData,
+      mastra: { getLogger: () => undefined },
+      requestContext: new RequestContext(),
+      runId: 'run-bind',
+    } as unknown as Parameters<typeof step.execute>[0]);
+
+    expect(seenModel).toBe(embeddingModel);
+  });
+
+  it('does not resolve the embedding model for a scoreless session, so it needs no OpenAI key', async () => {
+    // A session with no graded answers produces an empty report and never retrieves,
+    // so the coach step must not construct the (OpenAI-keyed) embedding model. No
+    // embeddingModel is injected: were the step to resolve it here, it would call the
+    // real getEmbeddingModel() and throw for want of a key.
+    const requestContext = new RequestContext();
+    let coachGenerated = false;
+
+    const inputData = gradedInterviewStateSchema.parse({
+      profile: candidateProfileSchema.parse({ name: 'Ada Lovelace' }),
+      roleContext: roleContextSchema.parse({ role: 'Staff Engineer' }),
+      candidateId: 'candidate-empty',
+      candidateIdOrigin: 'default',
+      threadId: 'thread-empty',
+      researchUrls: [],
+      companyBrief: EMPTY_COMPANY_BRIEF,
+      limits: DEFAULT_CAP_LIMITS,
+      targetLevel: 'senior',
+      coverage: {},
+      done: true,
+      transcript: [],
+      closingMessage: 'Thanks for coming in.',
+      grade: sessionGradeSchema.parse({ scores: [], skipped: [] }),
+    });
+
+    const step = createCoachStep({
+      coach: {
+        generate: async () => {
+          coachGenerated = true;
+          return { object: coachReportSchema.parse({ summary: '', answerAdvice: [], drills: [], studyPlan: '' }) };
+        },
+      },
+      memory: {
+        getWorkingMemory: async () => null,
+        updateWorkingMemory: async () => {
+          /* no ledger assertion in this test */
+        },
+      },
+    });
+
+    const result = await step.execute({
+      inputData,
+      mastra: { getLogger: () => undefined },
+      requestContext,
+      runId: 'run-empty',
+    } as unknown as Parameters<typeof step.execute>[0]);
+
+    // The retrieval-model override was never armed, and the coach never generated —
+    // the empty-grade path returns an empty report without touching the model.
+    expect(requestContext.get(RETRIEVAL_MODEL_CONTEXT_KEY)).toBeUndefined();
+    expect(coachGenerated).toBe(false);
+    expect((result as { coaching: { summary: string } }).coaching.summary).toBe('');
   });
 });

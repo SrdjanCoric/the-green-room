@@ -139,7 +139,17 @@ const regradeWorkflow = createWorkflow({
   .dountil(interviewTurnStep, async (context) => interviewLoopDone(context))
   .then(closingStep)
   .then(createGradeStep({ grader }))
-  .then(createCoachStep({ coach }))
+  // A stub embedding model stands in for the retrieval tool's real (OpenAI-keyed) one:
+  // the fake coach never retrieves, so it only needs to keep the step from building the
+  // real model, which would validate a key absent in tests.
+  .then(
+    createCoachStep({
+      coach,
+      embeddingModel: { modelId: 'stub-embedder' } as unknown as NonNullable<
+        Parameters<typeof createCoachStep>[0]
+      >['embeddingModel'],
+    }),
+  )
   .then(createReportStep({ reportsDir }))
   .commit();
 

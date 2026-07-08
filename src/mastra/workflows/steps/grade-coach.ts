@@ -9,7 +9,9 @@ import {
   upsertSessionSummary,
   type SessionSummary,
 } from '../../interview/coaching-ledger';
+import { getEmbeddingModel } from '../../knowledge/embedding';
 import { candidateMemory } from '../../memory';
+import { RETRIEVAL_MODEL_CONTEXT_KEY } from '../../tools/coach-retrieval';
 import { neutralizeFences } from '../../prompt-safety';
 import { structuredCall, type StructuredGenerator } from '../../structured-call';
 import {
@@ -258,13 +260,30 @@ export function createGradeStep(options: { grader?: StructuredGenerator } = {}) 
 export const gradeStep = createGradeStep();
 
 export function createCoachStep(
-  options: { coach?: StructuredGenerator; memory?: CandidateLedgerStore } = {},
+  options: {
+    coach?: StructuredGenerator;
+    memory?: CandidateLedgerStore;
+    /** Embedding model for the retrieval tool; defaults to the corpus's OpenAI model. */
+    embeddingModel?: ReturnType<typeof getEmbeddingModel>;
+  } = {},
 ) {
   return createStep({
     id: 'coach',
     inputSchema: gradedInterviewStateSchema,
     outputSchema: coachedInterviewStateSchema,
     execute: async ({ inputData, mastra, requestContext, runId }) => {
+      // The coach's retrieval tool embeds its query with the corpus's embedding model,
+      // handed to it through the tool's documented request-context override rather than
+      // hardcoded on the tool. Only a session with graded answers is coached (and so
+      // retrieves), so resolve the model — which validates the OpenAI key — only then:
+      // a scoreless session returns an empty report and must not require a key.
+      if (inputData.grade.scores.length > 0) {
+        requestContext.set(
+          RETRIEVAL_MODEL_CONTEXT_KEY,
+          options.embeddingModel ?? getEmbeddingModel(),
+        );
+      }
+
       const ledgerKey = {
         memory: options.memory ?? candidateMemory,
         candidateId: inputData.candidateId,

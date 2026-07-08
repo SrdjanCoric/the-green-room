@@ -71,6 +71,28 @@ export interface StructuredCallOptions {
 
 const DEFAULT_ATTEMPTS = 3;
 
+/**
+ * Base wait before the first transient-error retry; each further retry doubles it.
+ * A 429/overloaded blip usually clears in seconds — retrying back-to-back burns all
+ * attempts inside the same blip, so the retries wait instead. Validation-feedback
+ * retries stay immediate: the model call itself succeeded, waiting buys nothing.
+ */
+export const TRANSIENT_RETRY_BASE_MS = 250;
+
+/**
+ * Backoff for transient retry number `retry` (0-based): the cap doubles per retry,
+ * jittered into [cap/2, cap] so parallel callers hitting the same blip don't retry
+ * in lockstep.
+ */
+function transientRetryDelayMs(retry: number): number {
+  const cap = TRANSIENT_RETRY_BASE_MS * 2 ** retry;
+  return cap / 2 + Math.random() * (cap / 2);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** HTTP-ish statuses that a retry cannot fix: bad request, auth, or a missing model. */
 const NON_RETRYABLE_STATUSES = new Set([400, 401, 403, 404]);
 
@@ -134,6 +156,7 @@ async function withValidationRetries<T>(params: {
 }): Promise<T> {
   let currentPrompt = params.prompt;
   let lastError: unknown;
+  let transientFailures = 0;
 
   for (let attempt = 0; attempt < params.attempts; attempt += 1) {
     let outcome: Attempt<T>;
@@ -142,6 +165,10 @@ async function withValidationRetries<T>(params: {
     } catch (error) {
       if (isNonRetryableCallError(error)) throw error;
       lastError = error;
+      if (attempt < params.attempts - 1) {
+        await sleep(transientRetryDelayMs(transientFailures));
+      }
+      transientFailures += 1;
       continue;
     }
     if (outcome.ok) return outcome.value;

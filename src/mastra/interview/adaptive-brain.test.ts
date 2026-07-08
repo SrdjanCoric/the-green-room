@@ -194,6 +194,27 @@ describe('renderAssessments', () => {
   it('says nothing is assessed for an empty log', () => {
     expect(renderAssessments([])).toBe('No answers assessed yet.');
   });
+
+  it('renders a dry thread as exhausted and withholds the gaps and chaseable claims', () => {
+    const rendered = renderAssessments([
+      {
+        topic: 'the payments migration',
+        assessment: answerAssessmentSchema.parse({
+          star: { situation: true, task: true, action: true, result: false, quantifiedResult: false },
+          sufficientSignal: false,
+          threadDry: true,
+          claimsWorthChasing: ['cut deploy time to ten minutes'],
+        }),
+      },
+    ]);
+
+    expect(rendered).toContain('the thread is dry');
+    expect(rendered).toContain('treat the topic as exhausted');
+    // The leftover hooks are the temptation the dry verdict exists to end.
+    expect(rendered).not.toContain('needs more signal');
+    expect(rendered).not.toContain('story elements not stated yet');
+    expect(rendered).not.toContain('cut deploy time to ten minutes');
+  });
 });
 
 describe('renderDirective', () => {
@@ -215,13 +236,14 @@ describe('buildDirectorPrompt', () => {
     expect(withoutNudge).toContain('Distributed systems (5)');
   });
 
-  it('frames the question budget from the configured limits, as a ceiling rather than a target', () => {
+  it('states the question count against the configured hard cap, with no budget framing', () => {
     const prompt = buildDirectorPrompt(state());
 
-    // Derived from CapLimits, so the prompt and the config can never drift apart.
-    expect(prompt).toContain('budget of 10 questions');
-    expect(prompt).toContain('a ceiling, never a target');
-    expect(prompt).toContain('wrap up as soon as the signal is sufficient');
+    // Derived from CapLimits, so the prompt and the config can never drift apart. The
+    // system prompt's typical-length anchor decides when to wrap; the per-turn line
+    // only reports the count, so it must not condition wrapping on sufficiency.
+    expect(prompt).toContain('Questions asked so far: 0 of a hard cap of 10.');
+    expect(prompt).not.toContain('budget');
   });
 
   it('feeds the full cap state each turn, including the reprompt count and cap', () => {

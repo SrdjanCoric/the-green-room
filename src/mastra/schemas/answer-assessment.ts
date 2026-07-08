@@ -23,8 +23,11 @@ export type StarFlags = z.infer<typeof starFlagsSchema>;
 
 /**
  * The assessor's read of the latest answer: which STAR elements it states, whether the
- * current topic now holds enough signal to move on, and the claims worth chasing. The
- * director consumes these to decide the next move.
+ * current topic now holds enough signal to move on, whether the thread has gone dry,
+ * and the claims worth chasing. The director consumes these to decide the next move.
+ * `threadDry` is the second exit from a topic: sufficiency says the topic gave what it
+ * had, dryness says it is giving nothing more — a terse candidate never triggers the
+ * first, so without the second every thin topic gets probed until a cap ends it.
  */
 export const answerAssessmentSchema = z.object({
   star: starFlagsSchema.describe('Which story elements the latest answer states, as evidence.'),
@@ -33,6 +36,15 @@ export const answerAssessmentSchema = z.object({
     .describe(
       'True when the conversation on the current topic now holds enough concrete evidence ' +
         'of how the candidate works that more questions on it would add little.',
+    ),
+  threadDry: z
+    .boolean()
+    .default(false)
+    .describe(
+      'True when the run of answers on the current topic is thinning - each shorter, ' +
+        'terser, or pointing back at earlier answers - so another question on it would ' +
+        'only get a thinner reply. A trend across answers, never a single short one: ' +
+        'always false on the first answer of a topic.',
     ),
   claimsWorthChasing: z
     .array(z.string())

@@ -1,7 +1,44 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 
 import { MAX_CV_BYTES } from '../tools/extract-cv';
+
+/**
+ * How long an uploaded CV survives before the sweep removes it. An upload is only
+ * needed for the ingest step of the run it was uploaded for, so a day is generous —
+ * the cap exists because every prepare call writes a file, including setups the
+ * candidate abandons, and nothing else ever deletes them.
+ */
+export const UPLOAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Delete uploads older than the age cap. Best-effort housekeeping: a missing
+ * directory or a file that vanishes mid-sweep is fine, and the caller is expected
+ * not to await-and-fail a request on it.
+ */
+export async function sweepStaleUploads(
+  uploadsDir: string,
+  maxAgeMs: number = UPLOAD_MAX_AGE_MS,
+): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(uploadsDir);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - maxAgeMs;
+  await Promise.all(
+    names.map(async (name) => {
+      const path = join(uploadsDir, name);
+      try {
+        const info = await stat(path);
+        if (info.isFile() && info.mtimeMs < cutoff) await rm(path, { force: true });
+      } catch {
+        // Raced with another delete or an unreadable entry — housekeeping skips it.
+      }
+    }),
+  );
+}
 
 /**
  * CV file extensions the ingest step can read. Mirrors the set accepted by

@@ -1,12 +1,30 @@
 import { randomUUID } from 'node:crypto';
 
 import { registerApiRoute } from '@mastra/core/server';
+import { bodyLimit } from 'hono/body-limit';
 
 import { MAX_CV_BYTES } from '../tools/extract-cv';
 import type { ResolvePostingOptions } from '../tools/resolve-posting';
-import { CvValidationError, persistCvUpload } from './cv-upload';
+import { CvValidationError, persistCvUpload, sweepStaleUploads } from './cv-upload';
 import { type PostingInputKind, preparePosting } from './prepare-posting';
 import { uploadsDir } from './uploads-dir';
+
+/**
+ * The most this route reads of any request body: the CV byte cap plus headroom for
+ * the multipart framing and the pasted posting text. Enforced by streaming — a body
+ * with no declared Content-Length is counted as it arrives and dropped at the cap,
+ * so a hostile chunked upload cannot buffer unbounded memory; the exact per-file cap
+ * is still enforced after decode by {@link persistCvUpload}.
+ */
+export const PREPARE_BODY_LIMIT_BYTES = MAX_CV_BYTES + 256 * 1024;
+
+/** The streaming body-size guard mounted in front of the prepare handler. */
+export function createPrepareBodyLimit(maxSize: number = PREPARE_BODY_LIMIT_BYTES) {
+  return bodyLimit({
+    maxSize,
+    onError: (c) => c.json({ error: 'The CV file is too large.' }, 413),
+  });
+}
 
 /**
  * The slice of the Hono request context this handler reads. Kept minimal so the
@@ -16,7 +34,6 @@ import { uploadsDir } from './uploads-dir';
 export interface PrepareInterviewContext {
   req: {
     parseBody: () => Promise<Record<string, string | File>>;
-    header: (name: string) => string | undefined;
   };
   json: (data: unknown, status?: number) => Response;
 }
@@ -30,6 +47,8 @@ export interface PrepareInterviewHandlerDeps {
   maxBytes?: number;
   /** Injected posting-resolver options, for tests. */
   resolveOptions?: ResolvePostingOptions;
+  /** Stale-upload housekeeping; defaults to {@link sweepStaleUploads}. */
+  sweepUploads?: (uploadsDir: string) => Promise<void>;
 }
 
 /**
@@ -43,14 +62,15 @@ export interface PrepareInterviewHandlerDeps {
 export function createPrepareInterviewHandler(deps: PrepareInterviewHandlerDeps) {
   const generateId = deps.generateId ?? randomUUID;
   const maxBytes = deps.maxBytes ?? MAX_CV_BYTES;
+  const sweepUploads = deps.sweepUploads ?? sweepStaleUploads;
   return async (c: PrepareInterviewContext): Promise<Response> => {
-    // Reject an over-cap upload from its Content-Length before buffering the body, so
-    // a hostile multi-GB request can't exhaust memory. The exact byte cap is enforced
-    // again after decode; this precheck just avoids reading a body we'd reject anyway.
-    const declaredLength = Number(c.req.header('content-length'));
-    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-      return c.json({ error: 'The CV file is too large.' }, 413);
-    }
+    // Every prepare call writes a file, including setups the candidate abandons, so
+    // each call also sweeps expired ones. Fire-and-forget: housekeeping must never
+    // fail or slow the request it rides on. (Over-cap bodies never reach this
+    // handler — the route mounts a streaming body limit in front of it.)
+    void sweepUploads(deps.uploadsDir).catch(() => {
+      /* best-effort housekeeping — never fail the request it rides on */
+    });
 
     const body = await c.req.parseBody();
     const cv = body.cv;
@@ -90,5 +110,11 @@ export function createPrepareInterviewHandler(deps: PrepareInterviewHandlerDeps)
  */
 export const prepareInterviewRoute = registerApiRoute('/prepare-interview', {
   method: 'POST',
+  // `@mastra/core` bundles a vendored copy of the hono types, so the `MiddlewareHandler`
+  // from the `hono` package is a distinct nominal type from the one `registerApiRoute`
+  // expects — identical at runtime (same hono version), so the array is cast across.
+  middleware: [createPrepareBodyLimit()] as unknown as Parameters<
+    typeof registerApiRoute
+  >[1]['middleware'],
   handler: createPrepareInterviewHandler({ uploadsDir }),
 });

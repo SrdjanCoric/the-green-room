@@ -1,4 +1,4 @@
-# Interview Coach
+# The Green Room
 
 An agentic behavioral-interview coach built on [Mastra](https://mastra.ai). It runs a mock
 interview against your CV and a target job, adapts its questions turn by turn, then grades every
@@ -70,16 +70,16 @@ prints the closing summary, the transcript, and the path to the coaching report.
 
 ### `interview` flags
 
-| Flag             | Required | Description                                                             |
-| ---------------- | -------- | ----------------------------------------------------------------------- |
-| `--cv <path>`    | yes      | Candidate CV to interview against (`.pdf`, `.txt`, or `.md`).           |
-| `--job <src>`    | no       | Job posting as a URL, a file path, or pasted text. A failed URL fetch falls back to a paste prompt. |
-| `--level <level>`| no       | Target seniority (e.g. `junior`, `senior`, `staff`). Omit to be asked.  |
-| `--provider <name>` | no    | Model provider for both tiers (default: `anthropic`).                   |
-| `--fast-model <id>` | no    | Model id for the fast tier (CV/role parsers, interviewer, research).    |
-| `--smart-model <id>`| no    | Model id for the smart tier (director, grader, coach).                  |
-| `--candidate <id>`  | no    | Stable candidate id; keys resource-scoped working memory across sessions. |
-| `--max-questions <n>` | no  | Ceiling on questions asked in the session (default: 20). A ceiling, not a target: the director wraps up as soon as it has enough signal. |
+| Flag                  | Required | Description                                                                                                                              |
+| --------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `--cv <path>`         | yes      | Candidate CV to interview against (`.pdf`, `.txt`, or `.md`).                                                                            |
+| `--job <src>`         | no       | Job posting as a URL, a file path, or pasted text. A failed URL fetch falls back to a paste prompt.                                      |
+| `--level <level>`     | no       | Target seniority (e.g. `junior`, `senior`, `staff`). Omit to be asked.                                                                   |
+| `--provider <name>`   | no       | Model provider for both tiers (default: `anthropic`).                                                                                    |
+| `--fast-model <id>`   | no       | Model id for the fast tier (CV/role parsers, interviewer, research).                                                                     |
+| `--smart-model <id>`  | no       | Model id for the smart tier (director, grader, coach).                                                                                   |
+| `--candidate <id>`    | no       | Stable candidate id; keys resource-scoped working memory across sessions.                                                                |
+| `--max-questions <n>` | no       | Ceiling on questions asked in the session (default: 20). A ceiling, not a target: the director wraps up as soon as it has enough signal. |
 
 ## Resuming an interview
 
