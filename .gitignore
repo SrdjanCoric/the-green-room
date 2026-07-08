@@ -4,16 +4,19 @@ dist/
 web/dist/
 *.tsbuildinfo
 
-# Local data: workflow snapshots, memory, scorer results, vector index
-data/
+# Local data: workflow snapshots, memory, scorer results, uploads, reports. The
+# built knowledge index is the one exception — it ships with the app, so exclude
+# the directory's children (`data/*`, not `data/`) and re-include it after the
+# `*.db` rule, or the negation couldn't take effect.
+data/*
 *.db
 *.sqlite
+!data/knowledge.db
 
-# Private knowledge corpus (only synthetic samples are committed). Ignore the
-# corpus contents but re-include the samples directory — this must exclude children
-# (`knowledge/*`), not the directory itself, or the negation can't take effect.
-knowledge/*
-!knowledge/samples/
+# Knowledge corpora (top-level knowledge/) are private and never ship; the app
+# ships the built index at data/knowledge.db instead. Anchored so it can't catch
+# src/mastra/knowledge.
+/knowledge/
 
 # Secrets
 .env
