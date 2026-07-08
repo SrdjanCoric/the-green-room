@@ -66,7 +66,7 @@ export function createMastraInterviewClient(
 
     resume(
       runId: string,
-      resumeData: { answer: string } | { level: string },
+      resumeData: { answer: string } | { level: string } | { retry: true },
     ): AsyncIterable<InterviewEvent> {
       return (async function* (): AsyncGenerator<InterviewEvent> {
         const tracked = runs.get(runId) ?? { run: await workflow.createRun({ runId }) };
