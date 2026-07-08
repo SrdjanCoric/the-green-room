@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { useStickToBottom } from '../hooks/useStickToBottom';
 import type { InterviewState } from '../lib/interviewMachine';
 
 export interface InterviewScreenProps {
   state: InterviewState;
   onSubmitAnswer: (answer: string) => void;
   onSubmitLevel: (level: string) => void;
+  /** Reports that the goodbye finished typing out (drives `state.closingRevealed`). */
+  onClosingRevealed?: () => void;
 }
 
 /**
@@ -13,12 +16,37 @@ export interface InterviewScreenProps {
  * cue line while the run works, and the cue card the candidate delivers their line
  * into. When the run suspends for the target level, that turn asks for it instead.
  */
-export function InterviewScreen({ state, onSubmitAnswer, onSubmitLevel }: InterviewScreenProps) {
+export function InterviewScreen({
+  state,
+  onSubmitAnswer,
+  onSubmitLevel,
+  onClosingRevealed,
+}: InterviewScreenProps) {
   const streaming = state.phase === 'streamingQuestion';
   const awaitingAnswer = state.phase === 'awaitingAnswer';
   const awaitingLevel = state.phase === 'awaitingLevel';
   const grading = state.phase === 'grading';
   const showQuestion = streaming || awaitingAnswer;
+
+  // Grading holds off stage until the goodbye has typed out. The reveal fact lives in
+  // the machine (`closingRevealed`), reported from the typewriter's ticks below, so a
+  // remount mid-grading neither retypes the goodbye nor re-hides the grading.
+  const closingRevealed = state.closingMessage.length === 0 || state.closingRevealed;
+
+  // Follow the scene down the page: typed reveals and the streamed report preview
+  // track instantly (straight from the tick callbacks — no re-render per tick); a new
+  // turn (an answered question, a fresh cue card) glides.
+  const follow = useStickToBottom({ beatTick: `${state.transcript.length}:${state.phase}` });
+  useEffect(() => {
+    if (state.reportPreview) follow('instant');
+  }, [state.reportPreview, follow]);
+
+  const onClosingShown = (shown: number) => {
+    follow('instant');
+    if (!state.closingRevealed && state.closingMessage && shown >= state.closingMessage.length) {
+      onClosingRevealed?.();
+    }
+  };
 
   return (
     <>
@@ -39,7 +67,7 @@ export function InterviewScreen({ state, onSubmitAnswer, onSubmitLevel }: Interv
           <div className="line q">
             <div className="char">The Interviewer</div>
             <div className="say">
-              <TypewrittenQuestion text={state.currentQuestion} />
+              <TypewrittenLine text={state.currentQuestion} onShown={() => follow('instant')} />
             </div>
           </div>
         )}
@@ -47,16 +75,30 @@ export function InterviewScreen({ state, onSubmitAnswer, onSubmitLevel }: Interv
         {awaitingLevel && state.levelPrompt && (
           <Line who="The Interviewer" kind="q" text={state.levelPrompt} />
         )}
+
+        {state.closingMessage && (
+          <div className="line q">
+            <div className="char">The Interviewer</div>
+            <div className="say">
+              <TypewrittenLine
+                text={state.closingMessage}
+                // A remount after the goodbye already landed shows it whole, no retype.
+                initialCount={state.closingRevealed ? state.closingMessage.length : 0}
+                onShown={onClosingShown}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
-      {grading && state.reportPreview && (
+      {grading && state.reportPreview && closingRevealed && (
         <p className="report-preview">
           {state.reportPreview}
           <span className="caret" />
         </p>
       )}
 
-      {state.cue && !awaitingAnswer && !awaitingLevel && (
+      {state.cue && !awaitingAnswer && !awaitingLevel && closingRevealed && (
         <div className="cueing">
           <span className="sp" />
           {state.cue}
@@ -85,22 +127,33 @@ function sceneMeta(state: InterviewState): string {
   return parts.join(' · ');
 }
 
-/** Reveal pace for the question: 2 characters every 24ms (~80 chars a second). */
+/** Reveal pace for a typed line: 2 characters every 24ms (~80 chars a second). */
 const TYPE_CHARS = 2;
 const TYPE_INTERVAL_MS = 24;
 
 /**
- * Type the current question out at a steady pace instead of stamping it. The model's
- * stream arrives in coarse chunks — and the authoritative suspend delivers the full
- * text at once — so a fixed reveal rate is what makes the question feel delivered;
- * the reveal trails whatever text has actually arrived and catches up to it.
+ * Type a line out at a steady pace instead of stamping it: the current question, or
+ * the closing goodbye. The model's stream arrives in coarse chunks — and the
+ * authoritative suspend delivers the full text at once — so a fixed reveal rate is
+ * what makes the line feel delivered; the reveal trails whatever text has actually
+ * arrived and catches up to it. `onShown` reports how far the reveal has got, so the
+ * screen can hold the next beat until the line lands; `initialCount` starts the reveal
+ * mid-text (a remount of an already-delivered line shows it whole).
  */
-function TypewrittenQuestion({ text }: { text: string }) {
-  const [count, setCount] = useState(0);
-  // One interval lives for the whole question (the component unmounts between
-  // questions). It reads the latest text through a ref so a burst of arriving
-  // deltas never resets the pacing timer; a caught-up tick is a no-op state set,
-  // which React bails out of re-rendering.
+function TypewrittenLine({
+  text,
+  onShown,
+  initialCount = 0,
+}: {
+  text: string;
+  onShown?: (count: number) => void;
+  initialCount?: number;
+}) {
+  const [count, setCount] = useState(initialCount);
+  // One interval lives for the whole line (the component unmounts between questions).
+  // It reads the latest text through a ref so a burst of arriving deltas never resets
+  // the pacing timer; a caught-up tick is a no-op state set, which React bails out of
+  // re-rendering.
   const textRef = useRef(text);
   useEffect(() => {
     textRef.current = text;
@@ -118,6 +171,14 @@ function TypewrittenQuestion({ text }: { text: string }) {
   }, []);
 
   const shown = Math.min(count, text.length);
+  const onShownRef = useRef(onShown);
+  useEffect(() => {
+    onShownRef.current = onShown;
+  }, [onShown]);
+  useEffect(() => {
+    onShownRef.current?.(shown);
+  }, [shown, text]);
+
   return (
     <>
       {text.slice(0, shown)}

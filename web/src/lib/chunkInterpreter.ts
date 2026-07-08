@@ -16,7 +16,7 @@ export interface StreamChunk {
 }
 
 /** Which part of the UI the currently-active workflow step feeds tokens to. */
-type ActiveSection = 'question' | 'report' | null;
+type ActiveSection = 'question' | 'closing' | 'report' | null;
 
 interface StepCue {
   match: RegExp;
@@ -34,9 +34,15 @@ const STEP_CUES: StepCue[] = [
   { match: /director/i, label: 'Choosing the next question…', section: 'question' },
   { match: /interview|question|turn/i, label: 'Loading the next question…', section: 'question' },
   { match: /assess/i, label: 'Weighing your answer…', section: null },
+  { match: /closing/i, label: 'Wrapping up…', section: 'closing' },
   { match: /grade/i, label: 'Grading your answers…', section: 'report' },
   { match: /coach|report/i, label: "Writing the director's notes…", section: 'report' },
 ];
+
+/** The cue shown for each stage the ingest step reports through its progress chunks. */
+const INGEST_STAGE_CUES: Record<string, string> = {
+  role: 'Sizing up the role',
+};
 
 export interface ChunkInterpreter {
   /** Interpret one chunk, returning a domain event or `null` when it carries no UI signal. */
@@ -53,6 +59,16 @@ export function createChunkInterpreter(): ChunkInterpreter {
   return {
     next(outer: StreamChunk): InterviewEvent | null {
       const chunk = unwrapStepOutput(outer);
+
+      // A step's own progress marker: ingest reports moving from the CV to the role.
+      // The stage, not the chunk's mere presence, picks the cue — an unknown stage is
+      // ignored rather than mislabeled.
+      if (chunk.type === 'ingest-progress') {
+        const stage = asRecord(chunk)?.stage;
+        const label = typeof stage === 'string' ? INGEST_STAGE_CUES[stage] : undefined;
+        return label ? { type: 'cue', label } : null;
+      }
+
       const stepId = readStepId(chunk);
       if (stepId !== undefined) {
         const cue = STEP_CUES.find((c) => c.match.test(stepId));
@@ -64,6 +80,7 @@ export function createChunkInterpreter(): ChunkInterpreter {
       // A new reply opens: whatever streamed before it was a failed attempt's text.
       if (chunk.type === 'text-start') {
         if (section === 'question') return { type: 'question-start' };
+        if (section === 'closing') return { type: 'closing-start' };
         if (section === 'report') return { type: 'report-start' };
         return null;
       }
@@ -71,6 +88,7 @@ export function createChunkInterpreter(): ChunkInterpreter {
       const text = readTextDelta(chunk);
       if (text) {
         if (section === 'question') return { type: 'question-delta', text };
+        if (section === 'closing') return { type: 'closing-delta', text };
         if (section === 'report') return { type: 'report-delta', text };
       }
 

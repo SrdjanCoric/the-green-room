@@ -32,6 +32,43 @@ describe('createChunkInterpreter', () => {
     });
   });
 
+  it('advances the setup cue to the role stage on the ingest progress chunk', () => {
+    const interp = createChunkInterpreter();
+    interp.next(workflowStep('ingest'));
+
+    const enveloped: StreamChunk = {
+      from: 'USER',
+      type: 'workflow-step-output',
+      payload: { output: { type: 'ingest-progress', stage: 'role' } },
+    };
+    expect(interp.next(enveloped)).toEqual({ type: 'cue', label: 'Sizing up the role' });
+  });
+
+  it('ignores an ingest progress chunk whose stage it does not know', () => {
+    const interp = createChunkInterpreter();
+    interp.next(workflowStep('ingest'));
+
+    const unknownStage: StreamChunk = {
+      from: 'USER',
+      type: 'workflow-step-output',
+      payload: { output: { type: 'ingest-progress', stage: 'something-new' } },
+    };
+    expect(interp.next(unknownStage)).toBeNull();
+  });
+
+  it('cues the wrap-up and routes agent tokens to the closing while the closing step is active', () => {
+    const interp = createChunkInterpreter();
+
+    expect(interp.next(workflowStep('closing'))).toEqual({ type: 'cue', label: 'Wrapping up…' });
+    expect(interp.next({ from: 'AGENT', type: 'text-start', payload: {} })).toEqual({
+      type: 'closing-start',
+    });
+    expect(interp.next(textDelta('Thanks for walking me '))).toEqual({
+      type: 'closing-delta',
+      text: 'Thanks for walking me ',
+    });
+  });
+
   it('routes agent tokens to the report while the coach step is active', () => {
     const interp = createChunkInterpreter();
     interp.next(workflowStep('coach'));

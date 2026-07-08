@@ -91,6 +91,76 @@ describe('interviewReducer', () => {
     expect(state.cue).toMatch(/weighing/i);
   });
 
+  it('streams the closing goodbye after the last answer, clearing the cue', () => {
+    let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
+    state = interviewReducer(state, {
+      type: 'EVENT',
+      event: { type: 'suspended', suspend: { kind: 'question', question: 'Proudest work?', questionNumber: 1 } },
+    });
+    state = interviewReducer(state, { type: 'SUBMIT_ANSWER', answer: 'The migration.' });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'cue', label: 'Wrapping up…' } });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-start' } });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-delta', text: 'Thanks for ' } });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-delta', text: 'today.' } });
+
+    expect(state.phase).toBe('closing');
+    expect(state.closingMessage).toBe('Thanks for today.');
+    expect(state.cue).toBeNull();
+  });
+
+  it('drops a failed closing attempt’s partial text when a retried goodbye starts over', () => {
+    let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-delta', text: 'Thanks fo' } });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-start' } });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-delta', text: 'Thanks for today.' } });
+
+    expect(state.closingMessage).toBe('Thanks for today.');
+  });
+
+  it('marks the goodbye revealed only when the screen reports it, and re-arms on new text', () => {
+    let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-delta', text: 'Thanks ' } });
+    expect(state.closingRevealed).toBe(false);
+
+    state = interviewReducer(state, { type: 'CLOSING_REVEALED' });
+    expect(state.closingRevealed).toBe(true);
+
+    // More goodbye text arrives after a premature catch-up: the reveal re-arms.
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-delta', text: 'for today.' } });
+    expect(state.closingRevealed).toBe(false);
+
+    state = interviewReducer(state, { type: 'CLOSING_REVEALED' });
+    // A retried goodbye starts over: the reveal must re-arm with the text.
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-start' } });
+    expect(state.closingRevealed).toBe(false);
+  });
+
+  it('keeps the goodbye on screen while grading streams the report', () => {
+    let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-delta', text: 'Thanks for today.' } });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'cue', label: 'Grading your answers…' } });
+    state = interviewReducer(state, { type: 'EVENT', event: { type: 'report-delta', text: 'You perform ' } });
+
+    expect(state.phase).toBe('grading');
+    expect(state.closingMessage).toBe('Thanks for today.');
+    expect(state.reportPreview).toBe('You perform ');
+  });
+
+  it('returns to the working scene after the level pick, never the loading screen', () => {
+    let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
+    state = interviewReducer(state, {
+      type: 'EVENT',
+      event: { type: 'suspended', suspend: { kind: 'level', prompt: 'What level?' } },
+    });
+
+    state = interviewReducer(state, { type: 'SUBMIT_LEVEL' });
+
+    // Setup is over: the loading screen (the 'starting' phase) must not reappear.
+    expect(state.phase).not.toBe('starting');
+    expect(state.levelPrompt).toBeNull();
+    expect(state.cue).toMatch(/choosing the next question/i);
+  });
+
   it('streams report tokens then settles on the structured report', () => {
     let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
     state = interviewReducer(state, { type: 'EVENT', event: { type: 'report-delta', text: 'You perform ' } });
