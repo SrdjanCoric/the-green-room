@@ -1,5 +1,6 @@
 import { createStep } from '@mastra/core/workflows';
 import type { RequestContext } from '@mastra/core/request-context';
+import { z } from 'zod';
 
 import {
   computeSessionSummary,
@@ -122,6 +123,24 @@ export function createSessionGrader(
   };
 }
 
+/**
+ * What the coach call must deliver: the report shape plus real prose. A truncated or
+ * salvaged reply can satisfy the plain shape with empty or fragment strings (a run
+ * shipped `summary: ''` and `studyPlan: '.",'`), so the call-side floors turn that
+ * into a validation failure and the structured call's feedback retry re-asks the
+ * model. The base schema stays permissive for the no-scores empty report.
+ */
+const coachReplySchema = coachReportSchema.extend({
+  summary: z
+    .string()
+    .trim()
+    .min(30, 'summary must be a real read of the session, not empty or a fragment'),
+  studyPlan: z
+    .string()
+    .trim()
+    .min(30, 'studyPlan must be a real plan, not empty or a fragment'),
+});
+
 export function createCoachReporter(
   agent: StructuredGenerator,
   requestContext: RequestContext,
@@ -137,7 +156,7 @@ export function createCoachReporter(
     return structuredCall(
       agent,
       buildCoachPrompt(transcript, grade, targetLevel, priorSessions),
-      coachReportSchema,
+      coachReplySchema,
       requestContext,
       { description: 'coach', attempts: maxAttempts },
     );

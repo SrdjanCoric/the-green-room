@@ -36,7 +36,7 @@ const STEP_CUES: StepCue[] = [
   { match: /assess/i, label: 'Weighing your answer…', section: null },
   { match: /closing/i, label: 'Wrapping up…', section: 'closing' },
   { match: /grade/i, label: 'Grading your answers…', section: 'report' },
-  { match: /coach|report/i, label: "Writing the director's notes…", section: 'report' },
+  { match: /coach|report/i, label: 'Writing the coaching report…', section: 'report' },
 ];
 
 /** The cue shown for each stage the ingest step reports through its progress chunks. */

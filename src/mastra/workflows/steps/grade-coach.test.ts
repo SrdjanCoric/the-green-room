@@ -217,6 +217,26 @@ describe('createCoachReporter', () => {
     expect(calls).toBe(2);
   });
 
+  it('rejects an empty or fragment report and retries until the coach writes a real one', async () => {
+    let calls = 0;
+    const coach = createCoachReporter(
+      {
+        generate: async () => {
+          calls += 1;
+          return calls === 1
+            ? { object: { summary: '', answerAdvice: [], drills: [], studyPlan: '.\\",' } }
+            : { object: validReport };
+        },
+      },
+      requestContext,
+    );
+
+    const report = await coach(transcript, grade, 'senior');
+
+    expect(report.summary).toBe('Clear stories, but results stay vague.');
+    expect(calls).toBe(2);
+  });
+
   it('gives up after maxAttempts when the model never returns a report', async () => {
     let calls = 0;
     const coach = createCoachReporter(
@@ -346,10 +366,10 @@ describe('coaching-ledger read/write through working memory', () => {
     skipped: [],
   });
   const coaching = coachReportSchema.parse({
-    summary: 's',
+    summary: 'A candid read of the whole session so far.',
     answerAdvice: [],
     drills: [{ focus: 'Quantifying results', exercise: 'e' }],
-    studyPlan: 'p',
+    studyPlan: 'Practice quantifying outcomes in every story.',
   });
 
   async function seedCandidate(candidateId: string, threadId: string) {
@@ -438,12 +458,12 @@ describe('coach step ledger degradation', () => {
       },
     };
     const coaching = coachReportSchema.parse({
-      summary: 'Coached without history.',
+      summary: 'Coached without history for this first session.',
       answerAdvice: [
         { question: 'Q1', diagnosis: 'Thin on outcomes.', fix: 'End on the number.' },
       ],
       drills: [],
-      studyPlan: 'Quantify one story.',
+      studyPlan: 'Quantify one story end to end this week.',
     });
 
     const inputData = gradedInterviewStateSchema.parse({
