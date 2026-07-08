@@ -134,17 +134,22 @@ function unscannedResearchPages(message: MastraDBMessage, scanned: Set<string>):
  * through the detector as one text.
  */
 function pageScanInput(page: ResearchPage): string {
-  return page.url === undefined ? page.text : `Fetched from: ${page.url}\n\n${page.text}`;
+  return page.url ? `Fetched from: ${page.url}\n\n${page.text}` : page.text;
 }
 
 /**
  * Scrub the flagged page's URL out of the detector's rewrite before it is seated: the
  * rewrite covers the whole scan surface, so the "Fetched from:" line (full URL, riders
  * and all) can survive it verbatim — withholding the `url` field alone is not enough.
+ * The synthetic header line is dropped outright (a paraphrased echo would dodge an
+ * exact match), verbatim echoes elsewhere are replaced, and a rewrite that was nothing
+ * but the header degrades to the withheld-page text.
  */
 function withheldUrl(verdictText: string, url: string | undefined): string {
-  if (url === undefined) return verdictText;
-  return verdictText.split(url).join('[url withheld]');
+  if (!url) return verdictText;
+  const stripped = verdictText.replace(/^Fetched from:[^\n]*\n*/, '');
+  const scrubbed = stripped.split(url).join('[url withheld]');
+  return scrubbed.trim() === '' ? WITHHELD_PAGE_TEXT : scrubbed;
 }
 
 /**
