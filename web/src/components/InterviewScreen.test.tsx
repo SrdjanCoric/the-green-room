@@ -179,7 +179,7 @@ describe('InterviewScreen', () => {
         state={stateWith({
           phase: 'grading',
           reportPreview: 'You perform like someone who has done the work',
-          cue: "Writing the director's notes…",
+          cue: "Writing the coaching report…",
         })}
         onSubmitAnswer={vi.fn()}
         onSubmitLevel={vi.fn()}

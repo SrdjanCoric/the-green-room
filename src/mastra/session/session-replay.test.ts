@@ -107,10 +107,10 @@ const coach: StructuredGenerator = {
     coachCalls.count += 1;
     return {
       object: coachReportSchema.parse({
-        summary: 'A candid read of the session.',
+        summary: 'A candid read of the whole session.',
         answerAdvice: [{ question: 'Question 1', diagnosis: 'Thin on specifics.', fix: 'Add a metric.' }],
         drills: [],
-        studyPlan: 'Work on quantifying outcomes.',
+        studyPlan: 'Work on quantifying outcomes in every story.',
       }),
     };
   },
