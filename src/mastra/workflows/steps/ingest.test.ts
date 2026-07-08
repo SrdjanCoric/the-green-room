@@ -1,17 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { Mastra } from '@mastra/core';
 import { RequestContext } from '@mastra/core/request-context';
+import { createWorkflow } from '@mastra/core/workflows';
+import { LibSQLStore } from '@mastra/libsql';
 
 import { candidateWorkingMemorySchema } from '../../interview/coaching-ledger';
 import { candidateMemory } from '../../memory';
 import { candidateProfileSchema } from '../../schemas/candidate-profile';
 import { DEFAULT_ROLE_CONTEXT, roleContextSchema } from '../../schemas/role-context';
+import { CV_PATH_TRUST_ENV } from '../../server/cv-path-guard';
+import { ingestInputSchema, ingestOutputSchema } from '../interview-state';
 import {
   buildRoleContext,
   createAgentExtractor,
+  createIngestStep,
   createRoleContextBuilder,
   persistCandidateProfile,
   resolveCandidateIdentity,
+  type CandidateProfileStore,
 } from './ingest';
 
 const cannedProfile = {
@@ -318,5 +325,77 @@ describe('buildRoleContext', () => {
 
     expect(role).toBe(DEFAULT_ROLE_CONTEXT);
     expect(builder).not.toHaveBeenCalled();
+  });
+});
+
+/** An in-memory CandidateProfileStore, so the step test touches no real database. */
+function fakeProfileStore(): CandidateProfileStore {
+  const threads = new Map<string, { id: string }>();
+  const memories = new Map<string, string>();
+  return {
+    getThreadById: async ({ threadId }) => threads.get(threadId) ?? null,
+    saveThread: async ({ thread }) => {
+      threads.set(thread.id, { id: thread.id });
+      return thread;
+    },
+    getWorkingMemory: async ({ resourceId }) => memories.get(resourceId ?? '') ?? null,
+    updateWorkingMemory: async ({ resourceId, workingMemory }) => {
+      memories.set(resourceId ?? '', workingMemory);
+    },
+  };
+}
+
+describe('the ingest step progress cue', () => {
+  // The trust override is scoped to this suite: leaking it would silently disable the
+  // CV path-confinement guard for every later test in the worker.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('emits a role-stage progress chunk into the run stream once the CV is parsed', async () => {
+    vi.stubEnv(CV_PATH_TRUST_ENV, '1');
+    const step = createIngestStep({
+      readCv: async () => 'CV text for ada@example.com',
+      extractorFor: () => async () => cannedProfile,
+      roleBuilderFor: () => async () => roleContextSchema.parse({ role: 'Staff Engineer' }),
+      memory: fakeProfileStore(),
+    });
+    const workflow = createWorkflow({
+      id: 'ingestStreamTest',
+      inputSchema: ingestInputSchema,
+      outputSchema: ingestOutputSchema,
+    })
+      .then(step)
+      .commit();
+    const mastra = new Mastra({
+      workflows: { ingestStreamTest: workflow },
+      storage: new LibSQLStore({ id: 'ingest-stream-test', url: ':memory:' }),
+    });
+
+    const run = await mastra.getWorkflow('ingestStreamTest').createRun();
+    const output = run.stream({
+      inputData: {
+        cvPath: '/tmp/ada-cv.txt',
+        postingText: 'We are hiring a staff engineer.',
+        researchUrls: [],
+        threadId: 'thread-ingest-stream',
+      },
+    });
+
+    const chunks: unknown[] = [];
+    for await (const chunk of output.fullStream) chunks.push(chunk);
+    const result = await output.result;
+
+    expect(result.status).toBe('success');
+    const progress = chunks.find((chunk) => {
+      if (typeof chunk !== 'object' || chunk === null) return false;
+      const record = chunk as { type?: string; payload?: { output?: { type?: string } } };
+      return (
+        record.type === 'workflow-step-output' && record.payload?.output?.type === 'ingest-progress'
+      );
+    });
+    expect(progress).toMatchObject({
+      payload: { output: { type: 'ingest-progress', stage: 'role' } },
+    });
   });
 });

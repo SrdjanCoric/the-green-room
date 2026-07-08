@@ -10,6 +10,7 @@ import {
   advanceCoverage,
   buildDirectorPrompt,
   createAnswerAssessor,
+  createClosingWriter,
   createDirectorDecider,
   createInterviewerWriter,
   decideNextMove,
@@ -17,6 +18,7 @@ import {
   renderDirective,
   type BrainState,
 } from './adaptive-brain';
+import { CLOSING_SYSTEM_PROMPT } from '../agents/interviewer';
 import { neutralizeFences } from '../prompt-safety';
 import { capLimitsSchema, coverageStateSchema } from './interview-caps';
 
@@ -330,6 +332,54 @@ describe('the agent-backed brain callables', () => {
     const assessment = await assess('a topic', [{ question: 'Q', answer: 'A' }]);
     expect(seenSchema).toBe(answerAssessmentSchema);
     expect(assessment.sufficientSignal).toBe(true);
+  });
+});
+
+describe('the closing writer', () => {
+  const requestContext = new RequestContext();
+  const answered = state({
+    transcript: [
+      { question: 'What led up to the migration?', answer: 'I moved the API off the monolith.' },
+    ],
+  });
+
+  it('streams a transcript-aware closing under closing instructions, not question instructions', async () => {
+    let seenPrompt = '';
+    let seenOptions: { requestContext: unknown; instructions?: string } | undefined;
+    const written: unknown[] = [];
+    const close = createClosingWriter(
+      {
+        stream: async (prompt, options) => {
+          seenPrompt = prompt;
+          seenOptions = options;
+          return {
+            fullStream: (async function* () {
+              yield { type: 'text-delta', payload: { text: ' Thanks for walking me through the migration. ' } };
+              yield { type: 'finish' };
+            })(),
+            text: Promise.resolve(' Thanks for walking me through the migration. '),
+          };
+        },
+      },
+      requestContext,
+      {
+        write: async (chunk) => {
+          written.push(chunk);
+        },
+      },
+    );
+
+    const message = await close(answered);
+
+    expect(message).toBe('Thanks for walking me through the migration.');
+    expect(seenPrompt).toContain('I moved the API off the monolith.');
+    expect(seenOptions?.requestContext).toBe(requestContext);
+    expect(seenOptions?.instructions).toBe(CLOSING_SYSTEM_PROMPT);
+    expect(written[0]).toEqual({ type: 'text-start', payload: {} });
+    expect(written[1]).toEqual({
+      type: 'text-delta',
+      payload: { text: ' Thanks for walking me through the migration. ' },
+    });
   });
 });
 

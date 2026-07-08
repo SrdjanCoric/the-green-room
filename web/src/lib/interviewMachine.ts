@@ -13,6 +13,8 @@ export type InterviewPhase =
   | 'awaitingAnswer'
   | 'awaitingLevel'
   | 'assessing'
+  /** The interviewer is saying goodbye — the streamed closing line, before grading. */
+  | 'closing'
   | 'grading'
   | 'report'
   /** A turn failed but the run is alive and suspended — retryable, unlike `error`. */
@@ -32,6 +34,14 @@ export interface InterviewState {
   levelPrompt: string | null;
   /** A between-turns status line ("Choosing the next question…"). */
   cue: string | null;
+  /** The interviewer's streamed goodbye, shown as their final line before grading. */
+  closingMessage: string;
+  /**
+   * Whether the goodbye has fully typed out on screen. The screen reports it (the
+   * reveal is UI pacing); holding it here lets the grading gate and the report
+   * navigation survive a remount instead of retyping and re-hiding.
+   */
+  closingRevealed: boolean;
   /** Raw coach tokens streamed while the report is written, shown before it settles. */
   reportPreview: string;
   /** The finished report, once the run completes. */
@@ -47,6 +57,8 @@ export const initialInterviewState: InterviewState = {
   currentQuestionNumber: 0,
   levelPrompt: null,
   cue: null,
+  closingMessage: '',
+  closingRevealed: false,
   reportPreview: '',
   report: null,
   error: null,
@@ -57,6 +69,8 @@ export type InterviewAction =
   | { type: 'EVENT'; event: InterviewEvent }
   | { type: 'SUBMIT_ANSWER'; answer: string }
   | { type: 'SUBMIT_LEVEL' }
+  /** The screen finished typing the goodbye out; grading may take the stage. */
+  | { type: 'CLOSING_REVEALED' }
   | { type: 'RETRY' }
   | { type: 'RESET' };
 
@@ -79,8 +93,13 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
         cue: 'Weighing your answer…',
       };
 
+    // Setup finished before the level question, so this stays on the interview scene
+    // (the between-turns cue), never back on the loading screen.
     case 'SUBMIT_LEVEL':
-      return { ...state, phase: 'starting', levelPrompt: null, cue: 'Setting the stage…' };
+      return { ...state, phase: 'assessing', levelPrompt: null, cue: 'Choosing the next question…' };
+
+    case 'CLOSING_REVEALED':
+      return { ...state, closingRevealed: true };
 
     case 'RETRY':
       return { ...state, phase: 'assessing', error: null, cue: 'Retrying the turn…' };
@@ -111,6 +130,20 @@ function applyEvent(state: InterviewState, event: InterviewEvent): InterviewStat
         ...state,
         phase: 'streamingQuestion',
         currentQuestion: state.currentQuestion + event.text,
+        cue: null,
+      };
+
+    case 'closing-start':
+      // A retried goodbye streams again from the top; drop the failed attempt's text.
+      return { ...state, closingMessage: '', closingRevealed: false };
+
+    case 'closing-delta':
+      // New text re-arms the reveal: a premature catch-up mustn't leave it settled.
+      return {
+        ...state,
+        phase: 'closing',
+        closingMessage: state.closingMessage + event.text,
+        closingRevealed: false,
         cue: null,
       };
 
