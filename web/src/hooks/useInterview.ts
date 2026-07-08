@@ -5,6 +5,7 @@ import {
   initialInterviewState,
   interviewReducer,
 } from '../lib/interviewMachine';
+import { clearSession, clearStreamOffset, loadSession, saveSession } from '../lib/sessionStore';
 import type {
   InterviewClient,
   InterviewEvent,
@@ -19,6 +20,11 @@ export interface UseInterview {
   state: InterviewState;
   /** Start a fresh run and begin streaming toward the first question. */
   start: (input: StartInterviewInput) => void;
+  /**
+   * Rejoin an in-flight run after a reload or restored connection: restore its saved
+   * session snapshot and observe the run's live stream where it left off.
+   */
+  reconnect: (runId: string) => void;
   /** Answer the current question and stream toward the next one (or the report). */
   submitAnswer: (answer: string) => void;
   /** Choose the target level when the run suspended to ask for it. */
@@ -34,7 +40,11 @@ export interface UseInterview {
  * {@link InterviewClient}'s streamed events into it. The client is injected so the
  * screens can be exercised against a scripted mock without a live server.
  */
-export function useInterview(client: InterviewClient, onCompleted?: OnCompleted): UseInterview {
+export function useInterview(
+  client: InterviewClient,
+  onCompleted?: OnCompleted,
+  storage: Storage = window.localStorage,
+): UseInterview {
   const [state, dispatch] = useReducer(interviewReducer, initialInterviewState);
   const runIdRef = useRef<string | null>(null);
   // Latest-callback ref so consuming the stream never closes over a stale handler.
@@ -42,6 +52,20 @@ export function useInterview(client: InterviewClient, onCompleted?: OnCompleted)
   useEffect(() => {
     onCompletedRef.current = onCompleted;
   }, [onCompleted]);
+
+  // Keep the run's session snapshot in step with the live state so a reload can
+  // restore the settled transcript before rejoining the stream. A finished run's
+  // snapshot (and its stream offset) is dropped — the cached report takes over.
+  useEffect(() => {
+    const { runId, phase } = state;
+    if (!runId || phase === 'idle') return;
+    if (phase === 'report') {
+      clearSession(storage, runId);
+      clearStreamOffset(storage, runId);
+      return;
+    }
+    saveSession(storage, runId, state);
+  }, [state, storage]);
 
   const consume = useCallback(async (events: AsyncIterable<InterviewEvent>) => {
     try {
@@ -67,6 +91,15 @@ export function useInterview(client: InterviewClient, onCompleted?: OnCompleted)
       void consume(events);
     },
     [client, consume],
+  );
+
+  const reconnect = useCallback(
+    (runId: string) => {
+      runIdRef.current = runId;
+      dispatch({ type: 'RECONNECT', runId, snapshot: loadSession(storage, runId) });
+      void consume(client.observe(runId));
+    },
+    [client, consume, storage],
   );
 
   const submitAnswer = useCallback(
@@ -100,5 +133,5 @@ export function useInterview(client: InterviewClient, onCompleted?: OnCompleted)
     void consume(client.resume(runId, { retry: true }));
   }, [client, consume]);
 
-  return { state, start, submitAnswer, submitLevel, markClosingRevealed, retry };
+  return { state, start, reconnect, submitAnswer, submitLevel, markClosingRevealed, retry };
 }

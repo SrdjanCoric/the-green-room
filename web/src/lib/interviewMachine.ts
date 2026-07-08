@@ -66,6 +66,8 @@ export const initialInterviewState: InterviewState = {
 
 export type InterviewAction =
   | { type: 'START'; runId: string }
+  /** Rejoin an in-flight run after a reload, restoring its saved snapshot if any. */
+  | { type: 'RECONNECT'; runId: string; snapshot: InterviewState | null }
   | { type: 'EVENT'; event: InterviewEvent }
   | { type: 'SUBMIT_ANSWER'; answer: string }
   | { type: 'SUBMIT_LEVEL' }
@@ -83,6 +85,15 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
         phase: 'starting',
         runId: action.runId,
       };
+
+    // The snapshot restores the settled transcript; the in-flight section is rebuilt
+    // by the observed stream's replay, so hydrating partial text is safe either way.
+    // A cold reconnect (snapshot lost) still works — the stream and the run's
+    // persisted state carry the current turn; only past turns' display is gone.
+    case 'RECONNECT':
+      return action.snapshot
+        ? { ...action.snapshot, runId: action.runId }
+        : { ...initialInterviewState, phase: 'starting', runId: action.runId, cue: 'Reconnecting…' };
 
     case 'SUBMIT_ANSWER':
       return {

@@ -182,6 +182,55 @@ describe('interviewReducer', () => {
     expect(state.error).toBe('Run failed.');
   });
 
+  it('reconnects by hydrating the saved snapshot for the run', () => {
+    const snapshot = {
+      ...initialInterviewState,
+      phase: 'awaitingAnswer' as const,
+      runId: 'run-1',
+      transcript: [{ question: 'Q1', answer: 'A1' }],
+      currentQuestion: 'Q2?',
+      currentQuestionNumber: 2,
+    };
+
+    const state = interviewReducer(initialInterviewState, {
+      type: 'RECONNECT',
+      runId: 'run-1',
+      snapshot,
+    });
+
+    expect(state.phase).toBe('awaitingAnswer');
+    expect(state.runId).toBe('run-1');
+    expect(state.transcript).toEqual([{ question: 'Q1', answer: 'A1' }]);
+    expect(state.currentQuestion).toBe('Q2?');
+    expect(state.currentQuestionNumber).toBe(2);
+  });
+
+  it('reconnects cold (no snapshot) into a starting phase with a reconnect cue', () => {
+    const state = interviewReducer(initialInterviewState, {
+      type: 'RECONNECT',
+      runId: 'run-9',
+      snapshot: null,
+    });
+
+    expect(state.phase).toBe('starting');
+    expect(state.runId).toBe('run-9');
+    expect(state.transcript).toEqual([]);
+    expect(state.cue).toMatch(/reconnect/i);
+  });
+
+  it('trusts the run id it reconnected with over a stale snapshot field', () => {
+    const snapshot = { ...initialInterviewState, phase: 'grading' as const, runId: 'other-run' };
+
+    const state = interviewReducer(initialInterviewState, {
+      type: 'RECONNECT',
+      runId: 'run-1',
+      snapshot,
+    });
+
+    expect(state.runId).toBe('run-1');
+    expect(state.phase).toBe('grading');
+  });
+
   it('holds a failed turn as retryable rather than dead, then retries it', () => {
     let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'run-1' });
     state = interviewReducer(state, {
