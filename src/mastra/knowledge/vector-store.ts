@@ -9,7 +9,9 @@ import { knowledgeDbUrl } from './config';
 /**
  * The RAG vector index for the coach's `how-to-answer` corpus. It is a separate
  * LibSQL database from the workflow/memory store so their schemas stay independent,
- * but it lives beside `mastra.db` in the same `./data/` directory (both gitignored).
+ * but it lives beside `mastra.db` in the same `./data/` directory — the one file
+ * there that ships with the repo (a built index, so the coach retrieves out of the
+ * box).
  * The ingest command writes this file and the coach's query tool reads it, so both
  * must resolve to the same URL — hence it is derived from the shared main database
  * URL. `KNOWLEDGE_DB_URL` overrides it (e.g. a Turso URL); a non-file main database
