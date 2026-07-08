@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { InterviewScreen } from './components/InterviewScreen';
 import { LoadingScreen } from './components/LoadingScreen';
@@ -43,8 +43,14 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
   const [history, setHistory] = useState<RunHistoryEntry[]>(() => loadHistory(store));
   const [busy, setBusy] = useState(false);
   const [prepError, setPrepError] = useState<string | null>(null);
-  const [viewedReport, setViewedReport] = useState<InterviewReport | null>(() =>
-    route.name === 'report' ? loadCachedReport(store, route.runId) : null,
+  // A cached report opened from the playbill, tagged with its run so it can never
+  // shadow a different run's report on the report route.
+  const [viewedReport, setViewedReport] = useState<{ runId: string; report: InterviewReport } | null>(
+    () => {
+      if (route.name !== 'report') return null;
+      const cached = loadCachedReport(store, route.runId);
+      return cached ? { runId: route.runId, report: cached } : null;
+    },
   );
 
   const navigate = useCallback((next: Route) => {
@@ -81,8 +87,9 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     [store],
   );
 
-  // When the run finishes, cache the report, mark the run closed, and show the notes.
-  // This runs from the stream-consumption path (an event), not a render effect.
+  // When the run finishes, cache the report and mark the run closed. This runs from
+  // the stream-consumption path (an event); showing the notes is the effect below,
+  // which can wait for the goodbye to finish typing first.
   const handleCompleted = useCallback(
     (report: InterviewReport, runId: string) => {
       cacheReport(store, runId, report);
@@ -93,13 +100,44 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
         level: report.targetLevel,
         status: 'done',
       });
-      setViewedReport(null);
-      navigate({ name: 'report', runId });
     },
-    [store, patchHistory, navigate],
+    [store, patchHistory],
   );
 
   const interview = useInterview(interviewClient, handleCompleted);
+
+  // Show the notes once the run has finished — but if the candidate is watching the
+  // interview scene mid-goodbye, hold the curtain until the line finishes typing.
+  // The effect only writes the hash (syncing to the browser); the hashchange
+  // listener above carries it into the route state. It surfaces each finished run
+  // exactly once — the latch keeps it from enforcing the report route forever, which
+  // would trap every later navigation (a new audition, another run's report) — and a
+  // candidate who navigates away during the held goodbye has made their choice: the
+  // run counts as surfaced without ever yanking them back.
+  const surfacedRunRef = useRef<string | null>(null);
+  const heldRunRef = useRef<string | null>(null);
+  const { phase, report: liveReport, runId: liveRunId, closingMessage, closingRevealed } =
+    interview.state;
+  useEffect(() => {
+    if (phase !== 'report' || !liveReport || !liveRunId) return;
+    if (surfacedRunRef.current === liveRunId) return;
+    if (route.name === 'report' && route.runId === liveRunId) {
+      // The candidate got here on their own; that counts as the curtain call.
+      surfacedRunRef.current = liveRunId;
+      return;
+    }
+    const watching = route.name === 'interview' && route.runId === liveRunId;
+    if (watching && closingMessage && !closingRevealed) {
+      heldRunRef.current = liveRunId;
+      return;
+    }
+    if (!watching && heldRunRef.current === liveRunId) {
+      surfacedRunRef.current = liveRunId;
+      return;
+    }
+    surfacedRunRef.current = liveRunId;
+    window.location.hash = toHash({ name: 'report', runId: liveRunId });
+  }, [phase, liveReport, liveRunId, closingMessage, closingRevealed, route]);
 
   async function begin(payload: SetupPayload) {
     setBusy(true);
@@ -143,7 +181,7 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     if (entry.status === 'done') {
       const cached = loadCachedReport(store, entry.runId);
       if (cached) {
-        setViewedReport(cached);
+        setViewedReport({ runId: entry.runId, report: cached });
         navigate({ name: 'report', runId: entry.runId });
         return;
       }
@@ -182,7 +220,11 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
 
   function renderScreen() {
     if (route.name === 'report') {
-      const shown = viewedReport ?? (interview.state.runId === route.runId ? interview.state.report : null);
+      const viewed = viewedReport?.runId === route.runId ? viewedReport.report : null;
+      const live = interview.state.runId === route.runId ? interview.state.report : null;
+      // Back/forward and manual hash edits reach this route without a playbill click,
+      // so fall through to the cache before giving up on the report.
+      const shown = viewed ?? live ?? loadCachedReport(store, route.runId);
       if (shown) return <ReportScreen report={shown} />;
       return <SetupScreen onBegin={begin} busy={busy} error={prepError} />;
     }
@@ -213,6 +255,7 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
             if (interview.state.runId) patchHistory(interview.state.runId, { level });
             interview.submitLevel(level);
           }}
+          onClosingRevealed={interview.markClosingRevealed}
         />
       );
     }

@@ -64,6 +64,8 @@ export type InterviewEvent =
   /** A fresh reply begins — accumulated deltas belong to a failed attempt; drop them. */
   | { type: 'question-start' }
   | { type: 'question-delta'; text: string }
+  | { type: 'closing-start' }
+  | { type: 'closing-delta'; text: string }
   | { type: 'report-start' }
   | { type: 'report-delta'; text: string }
   | { type: 'suspended'; suspend: SuspendPayload }

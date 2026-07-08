@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { InterviewReport } from '../lib/types';
 import { ReportScreen } from './ReportScreen';
@@ -25,6 +25,25 @@ const report: InterviewReport = {
 };
 
 describe('ReportScreen', () => {
+  it('opens at the top of the page, not where the interview ended', () => {
+    vi.mocked(window.scrollTo).mockClear();
+
+    render(<ReportScreen report={report} />);
+
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
+  });
+
+  it('returns to the top when another report opens without a remount', () => {
+    // Opening cached report B while cached report A is on screen only swaps the prop;
+    // the scroll-to-top must fire again for the new report.
+    const { rerender } = render(<ReportScreen report={report} />);
+    vi.mocked(window.scrollTo).mockClear();
+
+    rerender(<ReportScreen report={{ ...report, role: 'Another role entirely' }} />);
+
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
+  });
+
   it('renders the director-notes tab by default', () => {
     render(<ReportScreen report={report} />);
 

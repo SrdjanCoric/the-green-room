@@ -193,51 +193,92 @@ export async function buildRoleContext(params: {
   return roleContextSchema.parse(await params.builder(text));
 }
 
+/** The slice of the Mastra registry the ingest step resolves its agents from. */
+interface IngestAgentRegistry {
+  getAgent(id: string): StructuredGenerator;
+}
+
+/** The injectable boundaries of the ingest step; production defaults fill the gaps. */
+export interface IngestBoundaries {
+  /** Reads the CV file into text; defaults to {@link extractCvText}. */
+  readCv?: (cvPath: string) => Promise<string>;
+  /** Resolves the CV-parser boundary; defaults to the `cvParser` agent. */
+  extractorFor?: (registry: IngestAgentRegistry, requestContext: RequestContext) => ProfileExtractor;
+  /** Resolves the role-builder boundary; defaults to the `roleBuilder` agent. */
+  roleBuilderFor?: (
+    registry: IngestAgentRegistry,
+    requestContext: RequestContext,
+  ) => RoleContextBuilder;
+  /** Where the candidate profile is persisted; defaults to the shared memory. */
+  memory?: CandidateProfileStore;
+}
+
 /**
- * `ingest`: read the CV into a structured profile (written to the candidate's working
- * memory) and derive the role context from the resolved job posting, falling back to a
- * generic role context when no posting was provided. The first step of the interview
- * workflow.
+ * Build the ingest step around its boundaries: read the CV into a structured profile
+ * (written to the candidate's working memory) and derive the role context from the
+ * resolved job posting, falling back to a generic role context when no posting was
+ * provided. The first step of the interview workflow. Between the two parses it writes
+ * an `ingest-progress` chunk into the run stream, so a watching client can move its
+ * stage cue from "reading the CV" to "sizing up the role" truthfully.
  */
-export const ingestStep = createStep({
-  id: 'ingest',
-  inputSchema: ingestInputSchema,
-  outputSchema: ingestOutputSchema,
-  execute: async ({ inputData, mastra, requestContext }) => {
-    // Over the Mastra server `cvPath` is client-controlled, so confine it to the
-    // upload directory unless a trusted process (the CLI) opts out. Without this the
-    // ingest step would read any file on the host — see the `ingestInputSchema` note.
-    assertCvPathAllowed(inputData.cvPath, {
-      uploadsDir,
-      trustLocalPaths: process.env[CV_PATH_TRUST_ENV] === '1',
-    });
-    const cvText = await extractCvText(inputData.cvPath);
-    const { candidateId, candidateIdOrigin } = resolveCandidateIdentity({
-      override: inputData.candidate,
-      cvText,
-    });
-    const profile = await persistCandidateProfile({
-      extractor: createAgentExtractor(mastra.getAgent('cvParser'), requestContext),
-      cvText,
-      memory: candidateMemory,
-      resourceId: candidateId,
-      threadId: inputData.threadId,
-    });
+export function createIngestStep(boundaries: IngestBoundaries = {}) {
+  const readCv = boundaries.readCv ?? extractCvText;
+  const extractorFor =
+    boundaries.extractorFor ??
+    ((registry: IngestAgentRegistry, requestContext: RequestContext) =>
+      createAgentExtractor(registry.getAgent('cvParser'), requestContext));
+  const roleBuilderFor =
+    boundaries.roleBuilderFor ??
+    ((registry: IngestAgentRegistry, requestContext: RequestContext) =>
+      createRoleContextBuilder(registry.getAgent('roleBuilder'), requestContext));
 
-    const roleContext = await buildRoleContext({
-      builder: createRoleContextBuilder(mastra.getAgent('roleBuilder'), requestContext),
-      postingText: inputData.postingText,
-    });
+  return createStep({
+    id: 'ingest',
+    inputSchema: ingestInputSchema,
+    outputSchema: ingestOutputSchema,
+    execute: async ({ inputData, mastra, requestContext, writer }) => {
+      // Over the Mastra server `cvPath` is client-controlled, so confine it to the
+      // upload directory unless a trusted process (the CLI) opts out. Without this the
+      // ingest step would read any file on the host — see the `ingestInputSchema` note.
+      assertCvPathAllowed(inputData.cvPath, {
+        uploadsDir,
+        trustLocalPaths: process.env[CV_PATH_TRUST_ENV] === '1',
+      });
+      const cvText = await readCv(inputData.cvPath);
+      const { candidateId, candidateIdOrigin } = resolveCandidateIdentity({
+        override: inputData.candidate,
+        cvText,
+      });
+      const profile = await persistCandidateProfile({
+        extractor: extractorFor(mastra, requestContext),
+        cvText,
+        memory: boundaries.memory ?? candidateMemory,
+        resourceId: candidateId,
+        threadId: inputData.threadId,
+      });
 
-    return {
-      profile,
-      roleContext,
-      candidateId,
-      candidateIdOrigin,
-      threadId: inputData.threadId,
-      researchUrls: inputData.researchUrls,
-      targetLevel: inputData.targetLevel,
-      limits: inputData.limits,
-    };
-  },
-});
+      // The CV is parsed; the posting is next. Tell watching clients so their setup
+      // cue can advance in step with what is actually running.
+      await writer.write({ type: 'ingest-progress', stage: 'role' });
+
+      const roleContext = await buildRoleContext({
+        builder: roleBuilderFor(mastra, requestContext),
+        postingText: inputData.postingText,
+      });
+
+      return {
+        profile,
+        roleContext,
+        candidateId,
+        candidateIdOrigin,
+        threadId: inputData.threadId,
+        researchUrls: inputData.researchUrls,
+        targetLevel: inputData.targetLevel,
+        limits: inputData.limits,
+      };
+    },
+  });
+}
+
+/** The production ingest step, on the real CV reader, agents, and memory. */
+export const ingestStep = createIngestStep();

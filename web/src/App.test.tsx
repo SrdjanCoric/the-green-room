@@ -29,6 +29,13 @@ async function* resumeEvents(): AsyncGenerator<InterviewEvent> {
   yield { type: 'completed', report };
 }
 
+async function* closingResume(): AsyncGenerator<InterviewEvent> {
+  yield { type: 'cue', label: 'Weighing your answer…' };
+  yield { type: 'closing-start' };
+  yield { type: 'closing-delta', text: 'Thanks for walking me through the migration today.' };
+  yield { type: 'completed', report };
+}
+
 function mockClient(): InterviewClient {
   return {
     start: (input) => ({ runId: input.threadId, events: startEvents() }),
@@ -74,6 +81,117 @@ describe('App — full interview flow', () => {
     // The finished run is recorded in the playbill.
     expect(screen.getByText('Staff Engineer')).toBeInTheDocument();
     expect(screen.getByText(/★ closed/i)).toBeInTheDocument();
+  });
+
+  it('surfaces the report once, without trapping later navigation', async () => {
+    const prepare = vi.fn(async () => prepared);
+    render(<App client={mockClient()} prepare={prepare} storage={window.localStorage} />);
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+    await userEvent.type(await screen.findByLabelText(/your answer/i), 'I led a migration.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+    expect(await screen.findByText(/strong, concrete material/i)).toBeInTheDocument();
+
+    // Leaving the finished report for a new audition must stick — the auto-surface
+    // fires once per completed run, it does not enforce the report route forever.
+    await userEvent.click(screen.getByRole('button', { name: /new audition/i }));
+    expect(await screen.findByRole('button', { name: /raise the curtain/i })).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(screen.queryByText(/strong, concrete material/i)).not.toBeInTheDocument();
+    expect(window.location.hash).toBe('#/setup');
+  });
+
+  it('shows a cached report when its route is reached by a plain hash change', async () => {
+    // Back/forward and manual hash edits reach the report route without a playbill
+    // click; the cache must still be consulted.
+    window.localStorage.setItem('green-room:report:run-a', JSON.stringify(report));
+    render(<App client={mockClient()} prepare={vi.fn(async () => prepared)} storage={window.localStorage} />);
+
+    window.location.hash = '#/report/run-a';
+    window.dispatchEvent(new Event('hashchange'));
+
+    expect(await screen.findByText(/strong, concrete material/i)).toBeInTheDocument();
+  });
+
+  it('does not yank a candidate back who walks away mid-goodbye', async () => {
+    const client: InterviewClient = {
+      start: (input) => ({ runId: input.threadId, events: startEvents() }),
+      resume: () => closingResume(),
+    };
+    const prepare = vi.fn(async () => prepared);
+    render(<App client={client} prepare={prepare} storage={window.localStorage} />);
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+    await userEvent.type(await screen.findByLabelText(/your answer/i), 'I led a migration.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+
+    // The goodbye starts typing (the run has completed behind it) and the candidate
+    // leaves for a new audition — their choice must stick, not be overridden by the
+    // deferred report reveal.
+    expect(await screen.findByText(/thanks for walking/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /new audition/i }));
+    expect(await screen.findByRole('button', { name: /raise the curtain/i })).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(screen.queryByText(/strong, concrete material/i)).not.toBeInTheDocument();
+    expect(window.location.hash).toBe('#/setup');
+  });
+
+  it('counts a report the candidate opened themselves as surfaced', async () => {
+    const client: InterviewClient = {
+      start: (input) => ({ runId: input.threadId, events: startEvents() }),
+      resume: () => closingResume(),
+    };
+    const prepare = vi.fn(async () => prepared);
+    render(<App client={client} prepare={prepare} storage={window.localStorage} />);
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+    await userEvent.type(await screen.findByLabelText(/your answer/i), 'I led a migration.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+
+    // Mid-goodbye, the candidate opens their own finished run from the playbill.
+    expect(await screen.findByText(/thanks for walking/i)).toBeInTheDocument();
+    await userEvent.click(await screen.findByText(/★ closed/i));
+    expect(await screen.findByText(/strong, concrete material/i)).toBeInTheDocument();
+
+    // Leaving it afterwards must stick: that run already had its curtain call.
+    await userEvent.click(screen.getByRole('button', { name: /new audition/i }));
+    expect(await screen.findByRole('button', { name: /raise the curtain/i })).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(window.location.hash).toBe('#/setup');
+  });
+
+  it('lets the goodbye finish typing before the report takes the stage', async () => {
+    const client: InterviewClient = {
+      start: (input) => ({ runId: input.threadId, events: startEvents() }),
+      resume: () => closingResume(),
+    };
+    const prepare = vi.fn(async () => prepared);
+    render(<App client={client} prepare={prepare} storage={window.localStorage} />);
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+
+    await userEvent.type(await screen.findByLabelText(/your answer/i), 'I led a migration.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+
+    // The goodbye starts typing; the run has already completed behind it, but the
+    // report must wait for the line to land.
+    expect(await screen.findByText(/thanks for walking/i)).toBeInTheDocument();
+    expect(screen.queryByText(/strong, concrete material/i)).not.toBeInTheDocument();
+
+    // Once the goodbye finishes, the notes take the stage.
+    expect(await screen.findByText(/strong, concrete material/i)).toBeInTheDocument();
   });
 
   it('surfaces a failed turn with a retry that resumes the run with { retry: true }', async () => {

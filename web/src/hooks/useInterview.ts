@@ -23,6 +23,8 @@ export interface UseInterview {
   submitAnswer: (answer: string) => void;
   /** Choose the target level when the run suspended to ask for it. */
   submitLevel: (level: string) => void;
+  /** Report that the goodbye finished typing out on screen. */
+  markClosingRevealed: () => void;
   /** Re-run a failed turn when the run suspended with a failure payload. */
   retry: () => void;
 }
@@ -87,6 +89,10 @@ export function useInterview(client: InterviewClient, onCompleted?: OnCompleted)
     [client, consume],
   );
 
+  const markClosingRevealed = useCallback(() => {
+    dispatch({ type: 'CLOSING_REVEALED' });
+  }, []);
+
   const retry = useCallback(() => {
     const runId = runIdRef.current;
     if (!runId) return;
@@ -94,5 +100,5 @@ export function useInterview(client: InterviewClient, onCompleted?: OnCompleted)
     void consume(client.resume(runId, { retry: true }));
   }, [client, consume]);
 
-  return { state, start, submitAnswer, submitLevel, retry };
+  return { state, start, submitAnswer, submitLevel, markClosingRevealed, retry };
 }

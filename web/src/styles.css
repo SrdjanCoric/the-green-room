@@ -28,6 +28,28 @@ body {
   margin: 0;
   height: 100%;
 }
+
+/* Scrollbars, in costume: a thin brass thumb on the dark stage, for the page and the
+   playbill alike. The two vendor models don't cascade the same way, so both are set. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--brass-dim) var(--stage);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--stage);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--brass-dim);
+  border-radius: 5px;
+  border: 2px solid var(--stage);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--brass);
+}
 body {
   font-family: var(--body);
   background: var(--stage);
@@ -176,6 +198,14 @@ aside {
   padding: 6px 16px 26px;
   overflow-y: auto;
   flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: var(--brass-dim) transparent;
+}
+.bill::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+}
+.bill::-webkit-scrollbar-thumb {
+  border-color: var(--velvet);
 }
 .bill li {
   margin: 0 0 6px;
