@@ -190,11 +190,17 @@ describe('createResearchPageGuard', () => {
           const part = message.content.parts[0];
           const text = part?.type === 'text' ? part.text : '';
           const firstLine = text.split('\n')[0] ?? '';
+          const url = firstLine.replace('Fetched from: ', '');
           return {
             ...message,
             content: {
               format: 2 as const,
-              parts: [{ type: 'text' as const, text: `${firstLine} - content removed` }],
+              parts: [
+                {
+                  type: 'text' as const,
+                  text: `${firstLine}\nThe page at ${url} was removed as unsafe.`,
+                },
+              ],
             },
           };
         });
@@ -211,7 +217,8 @@ describe('createResearchPageGuard', () => {
 
     const returned = (await runStep(guardWith(echoingScanner), messages)) as MastraDBMessage[];
 
-    expect(resultText(returned[0]!)).toBe('Fetched from: [url withheld] - content removed');
+    // The synthetic header line is dropped and the verbatim echo is scrubbed.
+    expect(resultText(returned[0]!)).toBe('The page at [url withheld] was removed as unsafe.');
   });
 
   it('catches injection riding in the final URL, not just the page text', async () => {

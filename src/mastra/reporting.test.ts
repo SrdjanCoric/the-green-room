@@ -110,9 +110,12 @@ describe('renderCoachReportMarkdown', () => {
             '~~~',
             '<img src=x onerror="alert(1)">',
             'inline HTML like <a href="https://evil.example">this</a> mid-line',
+            '\\<img src=x onerror="alert(1)"> hides behind its own backslash',
             '***',
             '___',
             '| forged | table |',
+            'forged | table',
+            '------ | -----',
           ].join('\n'),
         },
       ],
@@ -130,13 +133,18 @@ describe('renderCoachReportMarkdown', () => {
     expect(markdown).toContain('\\<img');
     expect(markdown).toContain('inline HTML like \\<a href="https://evil.example">this\\</a>');
     expect(markdown).not.toContain('\n<img');
+    // An attacker-supplied backslash cannot absorb our escape: the backslash itself is
+    // escaped first, so '\<img' becomes a literal backslash and a literal '<'.
+    expect(markdown).toContain('\\\\\\<img src=x onerror="alert(1)"> hides');
     // The untrusted question is quoted inside a trusted heading line: HTML in it is
     // escaped there too.
     expect(markdown).toContain('### Q1. Tell me about a \\<img src=x> migration.');
-    // Thematic breaks and table rows cannot fake report structure either.
+    // Thematic breaks and table rows — piped or pipe-less — cannot fake report structure.
     expect(markdown).toContain('\\***');
     expect(markdown).toContain('\\___');
-    expect(markdown).toContain('\\| forged | table |');
+    expect(markdown).toContain('\\| forged \\| table \\|');
+    expect(markdown).toContain('forged \\| table');
+    expect(markdown).toContain('------ \\| -----');
   });
 
   it('keeps forged Markdown in coach fields from becoming report structure', () => {

@@ -109,6 +109,8 @@ describe('App — full interview flow', () => {
     expect(resume).toHaveBeenCalledTimes(2);
     expect(resume).toHaveBeenNthCalledWith(1, expect.any(String), { answer: 'I led a migration.' });
     expect(resume).toHaveBeenNthCalledWith(2, expect.any(String), { retry: true });
+    // The retry targets the same run the answer went to, not a fresh one.
+    expect(resume.mock.calls[1]?.[0]).toBe(resume.mock.calls[0]?.[0]);
   });
 
   it('offers the paste fallback and does not start when a posting link fails to resolve', async () => {

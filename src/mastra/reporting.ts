@@ -35,22 +35,27 @@ function sanitizeFilenamePart(value: string): string {
 // heading line onto a single line, so no embedded newline can open a new block, and
 // escape raw HTML — inline HTML renders anywhere, headings included.
 function inlineText(value: string): string {
-  return value.replace(/\s+/g, ' ').replace(/</g, '\\<').trim();
+  return value.replace(/\s+/g, ' ').replace(/\\/g, '\\\\').replace(/</g, '\\<').trim();
 }
 
-// Neutralize a multi-line prose block: escape every '<' (inline HTML renders anywhere
-// in a line, not just at its start) and each line's leading Markdown structural token —
-// ATX headings, block quotes, lists, table pipes, code-fence openers, plus full-line
-// setext underlines (a `===`/`---` line promotes the line above it to a heading) and
-// thematic breaks — so injected text can never forge trusted-looking report structure
-// while the prose still reads normally (`\<`, `\-`, `\|` all render as the literal).
+// Neutralize a multi-line prose block. Backslashes are escaped first — otherwise an
+// attacker-supplied `\` in front of a token absorbs our escape (`\\<img>` renders a
+// literal backslash and live HTML). Then every '<' (inline HTML renders anywhere in a
+// line) and every '|' (GFM tables need no leading pipe, only a delimiter row) become
+// literals, and each line's leading Markdown structural token — ATX headings, block
+// quotes, lists, code-fence openers, plus full-line setext underlines (a `===`/`---`
+// line promotes the line above it to a heading) and thematic breaks — is escaped, so
+// injected text can never forge trusted-looking report structure while the prose still
+// reads normally (`\<`, `\-`, `\|` all render as the literal character).
 function neutralizeMarkdown(text: string): string {
   return text
     .split('\n')
     .map((line) =>
       line
+        .replace(/\\/g, '\\\\')
         .replace(/</g, '\\<')
-        .replace(/^(\s*)([#>|]|[-*+](?=\s)|\d+\.(?=\s)|`{3,}|~{3,})/, '$1\\$2')
+        .replace(/\|/g, '\\|')
+        .replace(/^(\s*)([#>]|[-*+](?=\s)|\d+\.(?=\s)|`{3,}|~{3,})/, '$1\\$2')
         .replace(/^(\s*)(=+|-+|[*_](?:\s*[*_]){2,})(\s*)$/, '$1\\$2$3'),
     )
     .join('\n');
