@@ -83,15 +83,22 @@ prints the closing summary, the transcript, and the path to the coaching report.
 
 ## Resuming an interview
 
-Each interview is durable. If you stop partway through, resume it from the terminal:
+Each interview is durable, in the browser and in the terminal.
+
+If you reload the page (or your connection drops) while a question or the final report is still
+streaming, the browser rejoins the same run where it left off: the server keeps a replay cache
+of every streamed chunk by run id, and the client picks up from the last chunk it received. Your
+answered questions are restored from a local session snapshot, and the in-flight text finishes
+streaming instead of restarting. An interview that's still open in the sidebar shows as
+**● now playing**; clicking it reconnects to that run. If the API server restarted in between,
+there's no live stream to rejoin; the interview instead picks up from its last saved turn.
+
+From the terminal:
 
 ```bash
 npm run cli -- resume              # resumes the most recent interview
 npm run cli -- resume --run <id>   # resumes a specific run
 ```
-
-The browser reopens finished runs from its history; reconnecting to a live run from an earlier
-browser session isn't supported yet.
 
 ## Reviewing reports
 
@@ -103,10 +110,10 @@ npm run cli -- reports
 
 ## Coaching knowledge
 
-The coach retrieves from a local knowledge index at `data/knowledge.db` (gitignored): notes on
-answer craft, chunked and embedded with OpenAI `text-embedding-3-small`. When the coach writes
-advice, it pulls the most relevant guidance for each weak answer and grounds the fix in it.
-Queries embed with the same model, which is why coached advice needs `OPENAI_API_KEY`.
+The coach retrieves from a local knowledge index at `data/knowledge.db`: notes on answer craft,
+chunked and embedded with OpenAI `text-embedding-3-small`. When the coach writes advice, it pulls
+the most relevant guidance for each weak answer and grounds the fix in it. Queries embed with the
+same model, which is why coached advice needs `OPENAI_API_KEY`.
 
 Build the index before your first coached run:
 
@@ -115,19 +122,9 @@ npm run ingest
 ```
 
 `ingest` also requires `OPENAI_API_KEY` (the index and its queries must use the same embedding
-model). It reads your **private corpus** at `knowledge/how-to-answer/` when that directory holds
-markdown, and otherwise falls back to the **committed samples** at `knowledge/samples/`, so it
-works out of the box:
-
-```
-knowledge/
-  how-to-answer/     # your private corpus — gitignored, user-supplied (*.md)
-  samples/           # committed synthetic examples used when the private corpus is absent
-```
-
-Drop your own `*.md` guidance into `knowledge/how-to-answer/` and re-run `npm run ingest` to
-replace the index with your corpus. Only `knowledge/samples/` is committed; the private corpus and
-the vector database never ship.
+model). It indexes the sample guidance committed at `knowledge/samples/`, so it works out of the
+box. To ground the coach in your own notes instead, point `KNOWLEDGE_CORPUS_DIR` at a directory
+of markdown files and re-run `npm run ingest`; the rebuild replaces the sample index.
 
 ## Studio
 
