@@ -263,6 +263,8 @@ describe('interviewReducer', () => {
       ...initialInterviewState,
       phase: 'assessing' as const,
       runId: 'run-1',
+      currentQuestionNumber: 2,
+      lastAnsweredQuestionNumber: 2,
       transcript: [
         { question: 'Q1?', answer: 'A1.' },
         { question: 'Q2?', answer: 'The answer the run never got.' },
@@ -288,6 +290,68 @@ describe('interviewReducer', () => {
       { question: 'Q1?', answer: 'A1.' },
       { question: 'Q2?', answer: 'A2, again.' },
     ]);
+  });
+
+  it('keeps the last answered turn when reconnecting while still awaiting the next, unanswered question', () => {
+    // The candidate answered Q1 and is now awaiting Q2 (never answered). A reload here
+    // must not mistake Q1's real answer for an orphan: the run re-suspends on Q2, whose
+    // number differs from the last *answered* question's, so nothing is dropped.
+    const snapshot = {
+      ...initialInterviewState,
+      phase: 'awaitingAnswer' as const,
+      runId: 'run-1',
+      currentQuestion: 'Q2?',
+      currentQuestionNumber: 2,
+      lastAnsweredQuestionNumber: 1,
+      transcript: [{ question: 'Q1?', answer: 'A1.' }],
+    };
+    let state = interviewReducer(initialInterviewState, {
+      type: 'RECONNECT',
+      runId: 'run-1',
+      snapshot,
+    });
+
+    state = interviewReducer(state, {
+      type: 'EVENT',
+      event: { type: 'suspended', suspend: { kind: 'question', question: 'Q2?', questionNumber: 2 } },
+    });
+
+    expect(state.transcript).toEqual([{ question: 'Q1?', answer: 'A1.' }]);
+    expect(state.currentQuestion).toBe('Q2?');
+  });
+
+  it('drops the orphaned answer keyed on questionNumber even when the re-asked text drifts', () => {
+    // The resume was lost, then the interviewer re-asked the same turn with slightly
+    // different wording (a retried attempt re-streams from the top). The question text
+    // no longer matches the orphan's, but the questionNumber does — the exact turn
+    // discriminator — so the lost answer is still dropped, not left in twice.
+    const snapshot = {
+      ...initialInterviewState,
+      phase: 'assessing' as const,
+      runId: 'run-1',
+      currentQuestionNumber: 2,
+      lastAnsweredQuestionNumber: 2,
+      transcript: [
+        { question: 'Q1?', answer: 'A1.' },
+        { question: 'Tell me about a conflict.', answer: 'The answer the run never got.' },
+      ],
+    };
+    let state = interviewReducer(initialInterviewState, {
+      type: 'RECONNECT',
+      runId: 'run-1',
+      snapshot,
+    });
+
+    state = interviewReducer(state, {
+      type: 'EVENT',
+      event: {
+        type: 'suspended',
+        suspend: { kind: 'question', question: 'Describe a disagreement you handled.', questionNumber: 2 },
+      },
+    });
+
+    expect(state.transcript).toEqual([{ question: 'Q1?', answer: 'A1.' }]);
+    expect(state.currentQuestion).toBe('Describe a disagreement you handled.');
   });
 
   it('holds a failed turn as retryable rather than dead, then retries it', () => {

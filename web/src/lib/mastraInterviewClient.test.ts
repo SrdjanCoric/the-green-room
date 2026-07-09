@@ -29,12 +29,38 @@ const startInput: StartInterviewInput = {
   threadId: RUN_ID,
 };
 
+/**
+ * A `runById` response as the server actually returns it under `fields:
+ * ['result', 'error', 'steps']`: only those fields, plus the metadata the server
+ * always includes regardless of `fields` — `runId`, `createdAt`, `updatedAt`, and
+ * `status`. The suspend rides under the suspended step (the run-state shape), never as
+ * a top-level `suspendPayload`. Modelling this proves the staleness floor arms from
+ * `updatedAt` even though `OUTCOME_FIELDS` never requests it.
+ */
+function fieldSelectedSuspend(
+  question: string,
+  questionNumber: number,
+  updatedAt: Date,
+): Record<string, unknown> {
+  return {
+    runId: RUN_ID,
+    status: 'suspended',
+    createdAt: new Date('2026-07-08T09:00:00Z'),
+    updatedAt,
+    result: undefined,
+    error: undefined,
+    steps: {
+      collectLevel: { status: 'success' },
+      interviewTurn: {
+        status: 'suspended',
+        suspendPayload: { kind: 'question', question, questionNumber },
+      },
+    },
+  };
+}
+
 /** The suspended state the poll settles on once a stream segment ends. */
-const suspendedOutcome = {
-  status: 'suspended',
-  updatedAt: new Date('2026-07-08T10:00:00Z'),
-  suspendPayload: { kind: 'question', question: 'Full question?', questionNumber: 1 },
-};
+const suspendedOutcome = fieldSelectedSuspend('Full question?', 1, new Date('2026-07-08T10:00:00Z'));
 
 function chunkStream(chunks: StreamChunk[]): ReadableStream<unknown> {
   return new ReadableStream({
@@ -225,16 +251,9 @@ describe('createMastraInterviewClient', () => {
   });
 
   it('observe() after a mid-turn reload waits out the pre-resume state instead of re-presenting it', async () => {
-    const preResume = {
-      status: 'suspended',
-      updatedAt: new Date('2026-07-08T10:00:00Z'),
-      suspendPayload: { kind: 'question', question: 'Question one?', questionNumber: 1 },
-    };
-    const settled = {
-      status: 'suspended',
-      updatedAt: new Date('2026-07-08T10:05:00Z'),
-      suspendPayload: { kind: 'question', question: 'Question two?', questionNumber: 2 },
-    };
+    const preResumeAt = new Date('2026-07-08T10:00:00Z');
+    const preResume = fieldSelectedSuspend('Question one?', 1, preResumeAt);
+    const settled = fieldSelectedSuspend('Question two?', 2, new Date('2026-07-08T10:05:00Z'));
     workflowMock.runById.mockResolvedValue(preResume);
     const run = fakeRun({
       // The resume request goes out, then the page dies before anything arrives.
@@ -245,8 +264,10 @@ describe('createMastraInterviewClient', () => {
     const client = createMastraInterviewClient('http://localhost', window.localStorage);
     await collect(client.start(startInput).events);
     await collectUntilError(client.resume(RUN_ID, { answer: 'A1.' }));
-    // The floor is armed: anything at or before the pre-resume write is not an outcome.
-    expect(loadRunMeta(window.localStorage, RUN_ID).staleAsOf).toBe(preResume.updatedAt.getTime());
+    // The floor is armed from `updatedAt` — server metadata that `OUTCOME_FIELDS` never
+    // requests but the server always returns — so writes at or before the pre-resume
+    // snapshot are not an outcome.
+    expect(loadRunMeta(window.localStorage, RUN_ID).staleAsOf).toBe(preResumeAt.getTime());
 
     // After the reload, the run's snapshot still shows the answered question for a
     // while; observe must wait for the turn's real result, not settle on the past.

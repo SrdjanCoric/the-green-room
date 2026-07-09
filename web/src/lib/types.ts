@@ -1,59 +1,27 @@
-// Domain types the React app speaks. They mirror the server-side workflow schemas
-// (candidate profile, coach report, suspend payloads) but are hand-declared here so
-// the browser bundle never imports the Node-only workflow code. The single source of
-// truth remains the Zod schemas under `src/mastra/schemas`; these must stay in step.
+// Domain types the React app speaks. The types that cross the client/server boundary
+// (coach report, transcript turns, suspend payloads) are imported from the shared
+// `wire-contract` module — the single source of truth both this app and the workflow
+// core derive from, so a renamed backend field breaks this build instead of silently
+// rendering nothing. Only the web-only view types (the flattened report, the stream
+// event union, the client interface) are declared here.
+import type { InterviewReportView, SuspendPayload } from '../../../shared/wire-contract';
 
-/** One answered turn of the interview. */
-export interface TranscriptEntry {
-  question: string;
-  answer: string;
-}
+/**
+ * The finished interview the report screen renders: the coaching notes and transcript,
+ * with the role/company flattened out of `roleContext` for display.
+ */
+export type InterviewReport = InterviewReportView;
 
-/** One piece of per-answer coaching, in transcript order. */
-export interface AnswerAdvice {
-  question: string;
-  diagnosis: string;
-  fix: string;
-}
-
-/** A practice drill for a recurring weak area. */
-export interface Drill {
-  focus: string;
-  exercise: string;
-}
-
-/** The coach's structured notes — the "director's notes" report screen. */
-export interface CoachReport {
-  summary: string;
-  answerAdvice: AnswerAdvice[];
-  drills: Drill[];
-  studyPlan: string;
-}
-
-/** The finished interview the report screen renders. */
-export interface InterviewReport {
-  coaching: CoachReport;
-  transcript: TranscriptEntry[];
-  targetLevel?: string;
-  reportPath?: string;
-  /** The role interviewed for, when the run resolved one. */
-  role?: string;
-  /** The company the role is at, when known. */
-  company?: string;
-}
+export type {
+  AnswerAdvice,
+  CoachReport,
+  Drill,
+  SuspendPayload,
+  TranscriptEntry,
+} from '../../../shared/wire-contract';
 
 /** How the setup form presented the posting: a link to fetch, or literal pasted text. */
 export type PostingInputKind = 'link' | 'paste';
-
-/**
- * What the workflow suspended for: a behavioural question, the target level, or a
- * failed turn held open for a retry (the run is alive; resuming with `{ retry: true }`
- * re-runs the turn).
- */
-export type SuspendPayload =
-  | { kind: 'question'; question: string; questionNumber: number }
-  | { kind: 'level'; prompt: string }
-  | { kind: 'failure'; reason: string };
 
 /**
  * A domain event yielded by an {@link InterviewClient} as a run streams. The React

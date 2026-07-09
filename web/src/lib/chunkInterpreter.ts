@@ -10,7 +10,9 @@ import type { InterviewEvent } from './types';
  */
 export interface StreamChunk {
   type?: string;
-  from?: 'AGENT' | 'WORKFLOW' | string;
+  // The two known sources, kept as literals for documentation while still admitting
+  // any other string the loose wire type may carry (`string & {}` preserves the hints).
+  from?: 'AGENT' | 'WORKFLOW' | (string & {});
   payload?: unknown;
   runId?: string;
 }
@@ -108,7 +110,7 @@ function unwrapStepOutput(chunk: StreamChunk): StreamChunk {
     if (current.type !== 'workflow-step-output') return current;
     const output = asRecord(asRecord(current.payload)?.output);
     if (!output) return current;
-    current = output as StreamChunk;
+    current = output;
   }
 }
 
@@ -118,11 +120,12 @@ function readStepId(chunk: StreamChunk): string | undefined {
   const p = asRecord(chunk.payload);
   if (!p) return undefined;
   const current = asRecord(p.currentStep);
-  const id =
-    (current && typeof current.id === 'string' && current.id) ||
-    (typeof p.stepId === 'string' && p.stepId) ||
-    (typeof p.id === 'string' && p.id);
-  return id || undefined;
+  // Probe the known id field paths in order, skipping empty strings; `||`/`??` on the
+  // mixed string|false|undefined intermediates would either misread or be flagged.
+  if (current && typeof current.id === 'string' && current.id) return current.id;
+  if (typeof p.stepId === 'string' && p.stepId) return p.stepId;
+  if (typeof p.id === 'string' && p.id) return p.id;
+  return undefined;
 }
 
 /** Read a token of streamed agent text, probing the known delta field paths. */
@@ -132,7 +135,8 @@ function readTextDelta(chunk: StreamChunk): string | undefined {
   const p = asRecord(chunk.payload);
   if (!p) return undefined;
   for (const key of ['textDelta', 'text', 'delta'] as const) {
-    if (typeof p[key] === 'string' && p[key]) return p[key] as string;
+    const value = p[key];
+    if (typeof value === 'string' && value) return value;
   }
   return undefined;
 }

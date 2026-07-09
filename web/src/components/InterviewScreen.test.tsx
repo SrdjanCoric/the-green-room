@@ -62,6 +62,42 @@ describe('InterviewScreen', () => {
     expect(onSubmitAnswer).toHaveBeenCalledWith('I led a migration.');
   });
 
+  it('disables the Deliver button the moment an answer is delivered, so a double-click sends once', async () => {
+    const onSubmitAnswer = vi.fn();
+    render(
+      <InterviewScreen
+        state={stateWith({ phase: 'awaitingAnswer', currentQuestion: 'Proudest work?', currentQuestionNumber: 1 })}
+        onSubmitAnswer={onSubmitAnswer}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    await userEvent.type(screen.getByLabelText(/your answer/i), 'I led a migration.');
+    const deliver = screen.getByRole('button', { name: /deliver/i });
+    await userEvent.dblClick(deliver);
+
+    expect(onSubmitAnswer).toHaveBeenCalledTimes(1);
+    expect(deliver).toBeDisabled();
+  });
+
+  it('disables the level Deliver button once a level is delivered', async () => {
+    const onSubmitLevel = vi.fn();
+    render(
+      <InterviewScreen
+        state={stateWith({ phase: 'awaitingLevel', levelPrompt: 'What level?' })}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={onSubmitLevel}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /^staff$/i }));
+    const deliver = screen.getByRole('button', { name: /deliver/i });
+    await userEvent.dblClick(deliver);
+
+    expect(onSubmitLevel).toHaveBeenCalledTimes(1);
+    expect(deliver).toBeDisabled();
+  });
+
   it('does not deliver an empty answer', async () => {
     const onSubmitAnswer = vi.fn();
     render(
@@ -213,6 +249,52 @@ describe('InterviewScreen', () => {
 
     await screen.findByText(/hardest bug you fixed/i);
     expect(window.scrollTo).toHaveBeenCalled();
+  });
+
+  it('announces the settled question to assistive tech and moves focus to the heading', () => {
+    render(
+      <InterviewScreen
+        state={stateWith({ phase: 'awaitingAnswer', currentQuestion: 'Proudest work?', currentQuestionNumber: 1 })}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    // A live region carries the settled question for screen readers.
+    expect(screen.getByRole('status')).toHaveTextContent('Proudest work?');
+    // Focus lands on the new scene's heading after the transition.
+    expect(screen.getByRole('heading', { name: /under the lights/i })).toHaveFocus();
+  });
+
+  it('shows the question whole at once when the user prefers reduced motion', () => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes('reduce'),
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    try {
+      render(
+        <InterviewScreen
+          state={stateWith({
+            phase: 'streamingQuestion',
+            currentQuestion: 'Walk me through the hardest bug you fixed.',
+          })}
+          onSubmitAnswer={vi.fn()}
+          onSubmitLevel={vi.fn()}
+        />,
+      );
+
+      // No typewriter reveal: the tail is on screen immediately, not after a delay.
+      expect(screen.getByText(/hardest bug you fixed/i)).toBeInTheDocument();
+    } finally {
+      window.matchMedia = original;
+    }
   });
 
   it('asks for the target level when the run suspends for it', async () => {

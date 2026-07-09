@@ -1,13 +1,5 @@
-import { z } from 'zod';
-
-/**
- * One recorded exchange of the interview: the question posed and the candidate's
- * verbatim answer. Answers are kept word-for-word — grading (task 0007) scores the
- * exact text, so nothing here is summarized.
- */
-export const transcriptEntrySchema = z.object({
-  question: z.string().describe('The question the interviewer asked this turn.'),
-  answer: z.string().describe("The candidate's answer, verbatim."),
-});
-
-export type TranscriptEntry = z.infer<typeof transcriptEntrySchema>;
+// The transcript-entry schema is part of the client/server wire contract, so it lives
+// in the dependency-free `shared/wire-contract` module the web client also imports.
+// This file re-exports it for the workflow core, keeping every existing import stable.
+export { transcriptEntrySchema } from '../../../shared/wire-contract';
+export type { TranscriptEntry } from '../../../shared/wire-contract';

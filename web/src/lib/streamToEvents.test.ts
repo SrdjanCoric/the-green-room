@@ -42,7 +42,10 @@ describe('streamToEvents', () => {
   it('yields a failure when the run ends without a readable outcome', async () => {
     const events = await collect(streamToEvents(fromArray([]), async () => undefined, 5));
 
-    expect(events).toEqual([{ type: 'failed', message: expect.stringMatching(/ended/i) }]);
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event).toMatchObject({ type: 'failed' });
+    if (event?.type === 'failed') expect(event.message).toMatch(/ended/i);
   });
 
   it('re-polls after the stream closes so a snapshot write that lags the close still settles', async () => {
@@ -137,7 +140,7 @@ describe('streamToEvents', () => {
     // watchdog must still detect the suspend from the run's persisted state.
     async function* neverEnds(): AsyncGenerator<StreamChunk> {
       yield { from: 'WORKFLOW', type: 'workflow-step-start', payload: { currentStep: { id: 'interviewTurn' } } };
-      await new Promise(() => {}); // hang forever
+      await new Promise(() => undefined); // hang forever
     }
     const outcome: WorkflowOutcome = {
       status: 'suspended',

@@ -66,6 +66,12 @@ export function useInterview(
   // The current generation's event iterator, so superseding it can close the old
   // stream (and its idle polling) eagerly instead of waiting for its next event.
   const activeIteratorRef = useRef<AsyncIterator<InterviewEvent> | null>(null);
+  // A turn is in flight from the moment a submit/retry fires until the run next
+  // settles (a fresh suspend, completion, or failure). Set synchronously so two fast
+  // clicks on Deliver — landing in the same tick, before the reducer re-renders the
+  // button away — cannot both fire a resume on the one suspend. A render-time phase
+  // check would miss this race; the ref closes it.
+  const turnInFlightRef = useRef(false);
   // Latest-callback refs so consuming the stream never closes over stale handlers.
   const onCompletedRef = useRef(onCompleted);
   const onFailedRef = useRef(onFailed);
@@ -109,10 +115,18 @@ export function useInterview(
       activeIteratorRef.current = iterator;
       try {
         for (;;) {
-          const { done, value: event } = await iterator.next();
-          if (done) return;
+          // Read the result whole, then narrow on `done`: destructuring `value`
+          // alongside `done` would widen it to the iterator's `any` return type.
+          const result = await iterator.next();
+          if (result.done) return;
           if (generationRef.current !== generation) return;
+          const event = result.value;
           dispatch({ type: 'EVENT', event });
+          // The turn is over once the run settles — a new suspend, the report, or a
+          // failure — so the next submit is free to fire.
+          if (event.type === 'suspended' || event.type === 'completed' || event.type === 'failed') {
+            turnInFlightRef.current = false;
+          }
           if (event.type === 'completed') onCompletedRef.current?.(event.report, runId);
           if (event.type === 'failed') onFailedRef.current?.(runId);
         }
@@ -136,7 +150,7 @@ export function useInterview(
         if (activeIteratorRef.current === iterator) activeIteratorRef.current = null;
         // Manual iteration skips for-await's implicit cleanup, so close the source
         // explicitly (a no-op when it already finished or failed).
-        void iterator.return?.(undefined).catch?.(() => {});
+        void iterator.return?.(undefined).catch?.(() => undefined);
       }
     },
     [client],
@@ -147,6 +161,8 @@ export function useInterview(
   const beginGeneration = useCallback((): number => {
     const generation = ++generationRef.current;
     void activeIteratorRef.current?.return?.(undefined);
+    // A fresh start/reconnect is a clean slate — no turn is mid-flight on it.
+    turnInFlightRef.current = false;
     return generation;
   }, []);
 
@@ -174,6 +190,17 @@ export function useInterview(
     [client, consume, storage, beginGeneration],
   );
 
+  // On unmount, supersede the current generation and close the active stream iterator,
+  // so a run in flight when the screen tears down doesn't leave its SSE connection and
+  // idle poll loop running (and dispatching into a dead reducer).
+  useEffect(
+    () => () => {
+      generationRef.current++;
+      void activeIteratorRef.current?.return?.(undefined);
+    },
+    [],
+  );
+
   // A run that died on a dead connection rejoins by itself when the connection
   // returns. The listener exists only while the run sits in the error state.
   useEffect(() => {
@@ -187,7 +214,8 @@ export function useInterview(
   const submitAnswer = useCallback(
     (answer: string) => {
       const runId = runIdRef.current;
-      if (!runId) return;
+      if (!runId || turnInFlightRef.current) return;
+      turnInFlightRef.current = true;
       dispatch({ type: 'SUBMIT_ANSWER', answer });
       void consume(client.resume(runId, { answer }), generationRef.current, runId, true);
     },
@@ -197,7 +225,8 @@ export function useInterview(
   const submitLevel = useCallback(
     (level: string) => {
       const runId = runIdRef.current;
-      if (!runId) return;
+      if (!runId || turnInFlightRef.current) return;
+      turnInFlightRef.current = true;
       dispatch({ type: 'SUBMIT_LEVEL' });
       void consume(client.resume(runId, { level }), generationRef.current, runId, true);
     },
@@ -210,7 +239,8 @@ export function useInterview(
 
   const retry = useCallback(() => {
     const runId = runIdRef.current;
-    if (!runId) return;
+    if (!runId || turnInFlightRef.current) return;
+    turnInFlightRef.current = true;
     dispatch({ type: 'RETRY' });
     void consume(client.resume(runId, { retry: true }), generationRef.current, runId, true);
   }, [client, consume]);

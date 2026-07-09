@@ -40,7 +40,7 @@ describe('SetupScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
 
     expect(onBegin).toHaveBeenCalledTimes(1);
-    const payload = onBegin.mock.calls[0][0] as SetupPayload;
+    const payload = onBegin.mock.calls[0]?.[0] as SetupPayload;
     expect(payload.postingKind).toBe('paste');
     expect(payload.job).toBe('Senior Backend Engineer.');
     expect(payload.cv.name).toBe('me.md');
@@ -57,7 +57,7 @@ describe('SetupScreen', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
 
-    const payload = onBegin.mock.calls[0][0] as SetupPayload;
+    const payload = onBegin.mock.calls[0]?.[0] as SetupPayload;
     expect(payload.postingKind).toBe('link');
     expect(payload.job).toBe('https://jobs.example.com/staff');
   });

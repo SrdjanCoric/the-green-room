@@ -237,7 +237,7 @@ async function* consumeStream(
   try {
     yield* streamToEvents(readReader(reader, onChunk), fetchOutcome);
   } finally {
-    await reader.cancel().catch(() => {});
+    await reader.cancel().catch(() => undefined);
   }
 }
 
@@ -251,6 +251,6 @@ async function* readReader(
     if (done) return;
     if (!value) continue;
     onChunk?.();
-    yield value as StreamChunk;
+    yield value;
   }
 }

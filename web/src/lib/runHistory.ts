@@ -1,5 +1,9 @@
+import { safeSetItem } from './storage';
+
 /** The "Previously staged" storage key. */
 export const HISTORY_KEY = 'green-room:history';
+
+const STATUSES: ReadonlySet<string> = new Set(['live', 'done', 'failed']);
 
 /** One past or in-progress interview shown in the sidebar. */
 export interface RunHistoryEntry {
@@ -13,21 +17,36 @@ export interface RunHistoryEntry {
   status: 'live' | 'done' | 'failed';
 }
 
-/** Read the interview history, tolerating an absent or corrupt store. */
+/**
+ * Read the interview history, tolerating an absent or corrupt store. Each entry is
+ * shape-checked rather than blindly cast, so a truncated write or an old schema drops
+ * the bad entries instead of hydrating the sidebar with ill-formed rows.
+ */
 export function loadHistory(storage: Storage): RunHistoryEntry[] {
   const raw = storage.getItem(HISTORY_KEY);
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as RunHistoryEntry[]) : [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isRunHistoryEntry) : [];
   } catch {
     return [];
   }
 }
 
-/** Persist the interview history. */
+function isRunHistoryEntry(value: unknown): value is RunHistoryEntry {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.runId === 'string' &&
+    typeof record.startedAt === 'string' &&
+    typeof record.status === 'string' &&
+    STATUSES.has(record.status)
+  );
+}
+
+/** Persist the interview history, guarding against a full-quota write. */
 export function saveHistory(storage: Storage, entries: RunHistoryEntry[]): void {
-  storage.setItem(HISTORY_KEY, JSON.stringify(entries));
+  safeSetItem(storage, HISTORY_KEY, JSON.stringify(entries));
 }
 
 /**
@@ -52,8 +71,9 @@ export function updateEntry(
   patch: Partial<RunHistoryEntry>,
 ): RunHistoryEntry[] {
   const index = entries.findIndex((e) => e.runId === runId);
-  if (index === -1) return entries;
+  const current = index === -1 ? undefined : entries[index];
+  if (!current) return entries;
   const next = entries.slice();
-  next[index] = { ...next[index], ...patch };
+  next[index] = { ...current, ...patch };
   return next;
 }

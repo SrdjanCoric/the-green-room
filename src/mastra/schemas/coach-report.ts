@@ -2,6 +2,18 @@ import { z } from 'zod';
 
 import { starFlagsSchema } from './answer-assessment';
 
+// The candidate-facing coach report (summary, per-answer advice, drills, study plan)
+// is part of the client/server wire contract, so it is defined in the dependency-free
+// `shared/wire-contract` module the web client also imports and re-exported here. The
+// grading schemas below (answer scores, session grade) stay local — they never cross
+// the wire and depend on the assessment schemas.
+export {
+  answerAdviceSchema,
+  drillSchema,
+  coachReportSchema,
+} from '../../../shared/wire-contract';
+export type { AnswerAdvice, Drill, CoachReport } from '../../../shared/wire-contract';
+
 export const answerScoreSchema = z
   .object({
     question: z.string().describe('The interview question this score grades.'),
@@ -99,55 +111,3 @@ export function sessionGradeForTranscriptSchema(turnCount: number) {
     }
   });
 }
-
-export const answerAdviceSchema = z.object({
-  question: z
-    .string()
-    .min(1)
-    .describe('The interview question this advice is about, quoted near-verbatim.'),
-  diagnosis: z
-    .string()
-    .min(1)
-    .describe(
-      'What specifically held this answer back, named against what the candidate actually said, not in the abstract.',
-    ),
-  fix: z
-    .string()
-    .min(1)
-    .describe(
-      "The concrete thing to do differently next time, tied to this answer's own gap: what to add, name, or quantify. Never generic advice like \"be more specific\".",
-    ),
-});
-
-export type AnswerAdvice = z.infer<typeof answerAdviceSchema>;
-
-export const drillSchema = z.object({
-  focus: z.string().min(1).describe('The recurring weakness this drill builds, named in plain words.'),
-  exercise: z
-    .string()
-    .min(1)
-    .describe('A concrete practice exercise the candidate can run on their own to build it.'),
-});
-
-export type Drill = z.infer<typeof drillSchema>;
-
-export const coachReportSchema = z.object({
-  summary: z
-    .string()
-    .describe(
-      'A candid read of how the session went across the answers: what is already working and what most needs work.',
-    ),
-  answerAdvice: z
-    .array(answerAdviceSchema)
-    .default([])
-    .describe('One entry per answer that needs work, in transcript order. Strong answers are left out.'),
-  drills: z
-    .array(drillSchema)
-    .default([])
-    .describe('A drill per recurring weak area the session surfaced. Empty when nothing recurs.'),
-  studyPlan: z
-    .string()
-    .describe('A short plan aggregating the weak areas into what to work on, in priority order.'),
-});
-
-export type CoachReport = z.infer<typeof coachReportSchema>;

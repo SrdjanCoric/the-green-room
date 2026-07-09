@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
 import {
+  failureSuspendWireSchema,
+  levelSuspendWireSchema,
+  questionSuspendWireSchema,
+} from '../../../shared/wire-contract';
+import {
   allowQuestion,
   capLimitsSchema,
   coverageStateSchema,
@@ -132,10 +137,7 @@ export const reportedInterviewStateSchema = coachedInterviewStateSchema.extend({
 export type ReportedInterviewState = z.infer<typeof reportedInterviewStateSchema>;
 
 /** Suspend payload for the target-level prompt: what to ask, tagged for the client. */
-export const levelSuspendSchema = z.object({
-  kind: z.literal('level'),
-  prompt: z.string().describe('The question asking the operator for the target level.'),
-});
+export const levelSuspendSchema = levelSuspendWireSchema;
 
 /** Resume payload answering the target-level prompt. */
 export const levelResumeSchema = z.object({
@@ -149,10 +151,7 @@ export const levelResumeSchema = z.object({
  * the exact move that was asked — never re-deciding, which would drift. The director's
  * private reasoning is deliberately not carried; the client only needs the question.
  */
-export const questionSuspendSchema = z.object({
-  kind: z.literal('question'),
-  question: z.string().describe('The question posed to the candidate this turn.'),
-  questionNumber: z.number().int().positive().describe('1-based index of this question.'),
+export const questionSuspendSchema = questionSuspendWireSchema.extend({
   action: directorActionSchema.describe('The director move that produced this question.'),
   subject: z
     .string()
@@ -172,9 +171,7 @@ export const answerResumeSchema = z.object({
  * had already arrived), `pending` carries the complete answered turn so the retry
  * replays it — assess only — and the candidate is never re-asked.
  */
-export const failureSuspendSchema = z.object({
-  kind: z.literal('failure'),
-  reason: z.string().describe('What failed, in operator-readable terms.'),
+export const failureSuspendSchema = failureSuspendWireSchema.extend({
   stage: z
     .enum(['director', 'interviewer', 'assessor'])
     .describe('The turn stage whose agent call failed.'),

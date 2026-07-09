@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { useFocusOnMount } from '../hooks/useFocusOnMount';
+import { usePrefersReducedMotion } from '../hooks/usePrefersReducedMotion';
 import { useStickToBottom } from '../hooks/useStickToBottom';
 import type { InterviewState } from '../lib/interviewMachine';
 
@@ -48,10 +50,26 @@ export function InterviewScreen({
     }
   };
 
+  const heading = useFocusOnMount<HTMLHeadingElement>();
+
   return (
     <>
+      {/*
+        The settled question, announced once. The typewriter above is aria-hidden so
+        assistive tech never reads it tick by tick; this live region carries the full
+        question the moment it lands (on `awaitingAnswer`), and nothing before.
+      */}
+      <div className="sr-only" role="status">
+        {awaitingAnswer ? state.currentQuestion : ''}
+      </div>
+
       <div className="scene-meta">{sceneMeta(state)}</div>
-      <h1 className="title-xl" style={{ fontSize: 'clamp(30px,4vw,44px)', margin: '14px 0 4px' }}>
+      <h1
+        ref={heading}
+        tabIndex={-1}
+        className="title-xl"
+        style={{ fontSize: 'clamp(30px,4vw,44px)', margin: '14px 0 4px' }}
+      >
         Under the lights.
       </h1>
 
@@ -64,7 +82,7 @@ export function InterviewScreen({
         ))}
 
         {showQuestion && state.currentQuestion && (
-          <div className="line q">
+          <div className="line q" aria-hidden="true">
             <div className="char">The Interviewer</div>
             <div className="say">
               <TypewrittenLine text={state.currentQuestion} onShown={() => follow('instant')} />
@@ -77,7 +95,7 @@ export function InterviewScreen({
         )}
 
         {state.closingMessage && (
-          <div className="line q">
+          <div className="line q" aria-hidden="true">
             <div className="char">The Interviewer</div>
             <div className="say">
               <TypewrittenLine
@@ -99,7 +117,7 @@ export function InterviewScreen({
       )}
 
       {state.cue && !awaitingAnswer && !awaitingLevel && closingRevealed && (
-        <div className="cueing">
+        <div className="cueing" role="status">
           <span className="sp" />
           {state.cue}
         </div>
@@ -149,6 +167,7 @@ function TypewrittenLine({
   onShown?: (count: number) => void;
   initialCount?: number;
 }) {
+  const reducedMotion = usePrefersReducedMotion();
   const [count, setCount] = useState(initialCount);
   // One interval lives for the whole line (the component unmounts between questions).
   // It reads the latest text through a ref so a burst of arriving deltas never resets
@@ -160,6 +179,8 @@ function TypewrittenLine({
   }, [text]);
 
   useEffect(() => {
+    // Reduced motion: no per-character reveal — the line is stamped whole below.
+    if (reducedMotion) return;
     const id = setInterval(() => {
       setCount((current) =>
         current >= textRef.current.length
@@ -168,9 +189,9 @@ function TypewrittenLine({
       );
     }, TYPE_INTERVAL_MS);
     return () => clearInterval(id);
-  }, []);
+  }, [reducedMotion]);
 
-  const shown = Math.min(count, text.length);
+  const shown = reducedMotion ? text.length : Math.min(count, text.length);
   const onShownRef = useRef(onShown);
   useEffect(() => {
     onShownRef.current = onShown;
@@ -201,6 +222,16 @@ const LEVELS = ['junior', 'mid-level', 'senior', 'staff'];
 
 function LevelPicker({ onPick }: { onPick: (level: string) => void }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+  // Same synchronous latch as the answer card: a double-click delivers the level once.
+  const deliveredRef = useRef(false);
+
+  function deliver() {
+    if (!selected || deliveredRef.current) return;
+    deliveredRef.current = true;
+    setSent(true);
+    onPick(selected);
+  }
 
   return (
     <div className="cuecard">
@@ -211,6 +242,7 @@ function LevelPicker({ onPick }: { onPick: (level: string) => void }) {
             className={`level-chip${selected === level ? ' selected' : ''}`}
             type="button"
             aria-pressed={selected === level}
+            disabled={sent}
             onClick={() => setSelected(level)}
           >
             {level}
@@ -219,12 +251,7 @@ function LevelPicker({ onPick }: { onPick: (level: string) => void }) {
       </div>
       <div className="row">
         <span className="tip">The seniority bar the interview should calibrate to.</span>
-        <button
-          className="deliver"
-          type="button"
-          disabled={!selected}
-          onClick={() => selected && onPick(selected)}
-        >
+        <button className="deliver" type="button" disabled={!selected || sent} onClick={deliver}>
           Deliver ▸
         </button>
       </div>
@@ -241,10 +268,16 @@ interface CueCardProps {
 
 function CueCard({ label, placeholder, tip, onDeliver }: CueCardProps) {
   const [value, setValue] = useState('');
+  const [sent, setSent] = useState(false);
+  // A synchronous latch: two clicks landing in the same tick (before `sent` re-renders
+  // the button disabled) still deliver the line exactly once.
+  const deliveredRef = useRef(false);
 
   function deliver() {
     const trimmed = value.trim();
-    if (!trimmed) return;
+    if (!trimmed || deliveredRef.current) return;
+    deliveredRef.current = true;
+    setSent(true);
     onDeliver(trimmed);
     setValue('');
   }
@@ -256,12 +289,18 @@ function CueCard({ label, placeholder, tip, onDeliver }: CueCardProps) {
           aria-label={label}
           placeholder={placeholder}
           value={value}
+          disabled={sent}
           onChange={(e) => setValue(e.target.value)}
         />
       </div>
       <div className="row">
         <span className="tip">{tip}</span>
-        <button className="deliver" type="button" onClick={deliver}>
+        <button
+          className="deliver"
+          type="button"
+          disabled={sent || value.trim().length === 0}
+          onClick={deliver}
+        >
           Deliver ▸
         </button>
       </div>
