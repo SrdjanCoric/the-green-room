@@ -27,6 +27,13 @@ export const candidateMemory = new Memory({
     workingMemory: {
       enabled: true,
       scope: 'resource',
+      // Documents the working-memory shape and future-proofs an eventual agent
+      // attachment, but is NOT the runtime guarantee here: `@mastra/memory` only
+      // `safeParse`s against this schema on the agent / observational-extractor
+      // write paths, which this app does not use. Our writes go through
+      // `updateWorkingMemory` directly, which does not consult it. The authoritative
+      // validation is in-code Zod parsing — `candidateProfileSchema.parse` in ingest
+      // and `candidateWorkingMemorySchema.safeParse` in `parseCandidateWorkingMemory`.
       schema: candidateWorkingMemorySchema,
       agentManaged: false,
     },
