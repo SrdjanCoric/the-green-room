@@ -1,12 +1,9 @@
-import type {
-  AnswerAdvice,
-  CoachReport,
-  Drill,
-  InterviewEvent,
-  InterviewReport,
-  SuspendPayload,
-  TranscriptEntry,
-} from './types';
+import {
+  interviewReportResultSchema,
+  interviewSuspendWireSchema,
+} from '../../../shared/wire-contract';
+
+import type { InterviewEvent, InterviewReport, SuspendPayload } from './types';
 
 /**
  * The authoritative end-of-stream state, in either of the two shapes Mastra hands
@@ -28,7 +25,9 @@ export interface WorkflowOutcome {
  * Normalise a finished/suspended run into the domain event the interview screen
  * acts on. Returns `null` while the run is still executing (running/waiting/pending),
  * so the caller keeps streaming. This is the single source of truth for the question,
- * the level prompt, and the final report — the live stream only decorates it.
+ * the level prompt, and the final report — the live stream only decorates it. Both the
+ * suspend payload and the result are validated through the shared wire-contract schemas,
+ * so a renamed backend field surfaces as a parse miss rather than a silent blank.
  */
 export function readOutcome(outcome: WorkflowOutcome | undefined): InterviewEvent | null {
   if (!outcome) return null;
@@ -54,28 +53,10 @@ function readSuspend(outcome: WorkflowOutcome): SuspendPayload | null {
   const payload = extractKindPayload(outcome.suspendPayload) ?? findSuspendedStepPayload(outcome.steps);
   if (!payload) return null;
 
-  if (payload.kind === 'level' && typeof payload.prompt === 'string') {
-    return { kind: 'level', prompt: payload.prompt };
-  }
-  if (payload.kind === 'question' && typeof payload.question === 'string') {
-    return {
-      kind: 'question',
-      question: payload.question,
-      questionNumber: typeof payload.questionNumber === 'number' ? payload.questionNumber : 1,
-    };
-  }
-  // A failed turn suspends instead of failing the run, so it is terminal for polling
-  // and the screen can offer a retry (resume with `{ retry: true }`).
-  if (payload.kind === 'failure') {
-    return {
-      kind: 'failure',
-      reason:
-        typeof payload.reason === 'string' && payload.reason
-          ? payload.reason
-          : 'The last turn failed.',
-    };
-  }
-  return null;
+  // The backend payloads carry extra private fields (the director's move, the failed
+  // stage); the shared wire schema narrows them to exactly what the screen consumes.
+  const parsed = interviewSuspendWireSchema.safeParse(payload);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -108,49 +89,21 @@ function findSuspendedStepPayload(
 }
 
 function readReport(result: unknown): InterviewReport | null {
-  const r = asRecord(result);
-  const coaching = asRecord(r?.coaching);
-  if (!r || !coaching) return null;
+  const parsed = interviewReportResultSchema.safeParse(result);
+  if (!parsed.success) return null;
+  const data = parsed.data;
 
-  const report: InterviewReport = {
-    coaching: {
-      summary: asString(coaching.summary),
-      answerAdvice: asAnswerAdvice(coaching.answerAdvice),
-      drills: asDrills(coaching.drills),
-      studyPlan: asString(coaching.studyPlan),
-    } satisfies CoachReport,
-    transcript: asTranscript(r.transcript),
-  };
-  if (typeof r.targetLevel === 'string') report.targetLevel = r.targetLevel;
-  if (typeof r.reportPath === 'string') report.reportPath = r.reportPath;
-
-  const role = asRecord(r.role);
-  if (role) {
-    if (typeof role.role === 'string' && role.role) report.role = role.role;
-    if (typeof role.company === 'string' && role.company) report.company = role.company;
+  const report: InterviewReport = { coaching: data.coaching, transcript: data.transcript };
+  if (data.targetLevel !== undefined) report.targetLevel = data.targetLevel;
+  if (data.reportPath !== undefined) report.reportPath = data.reportPath;
+  // The role and company live under the result's `roleContext` field — the workflow
+  // never surfaces a bare `role`. Flatten them onto the report the sidebar and screen
+  // meta read.
+  if (data.roleContext) {
+    if (data.roleContext.role) report.role = data.roleContext.role;
+    if (data.roleContext.company) report.company = data.roleContext.company;
   }
   return report;
-}
-
-function asAnswerAdvice(value: unknown): AnswerAdvice[] {
-  return asArray(value).map((item) => {
-    const a = asRecord(item);
-    return { question: asString(a?.question), diagnosis: asString(a?.diagnosis), fix: asString(a?.fix) };
-  });
-}
-
-function asDrills(value: unknown): Drill[] {
-  return asArray(value).map((item) => {
-    const d = asRecord(item);
-    return { focus: asString(d?.focus), exercise: asString(d?.exercise) };
-  });
-}
-
-function asTranscript(value: unknown): TranscriptEntry[] {
-  return asArray(value).map((item) => {
-    const t = asRecord(item);
-    return { question: asString(t?.question), answer: asString(t?.answer) };
-  });
 }
 
 function readErrorMessage(error: unknown): string {
@@ -162,12 +115,4 @@ function readErrorMessage(error: unknown): string {
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asString(value: unknown): string {
-  return typeof value === 'string' ? value : '';
 }

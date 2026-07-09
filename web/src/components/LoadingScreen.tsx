@@ -1,3 +1,5 @@
+import { useFocusOnMount } from '../hooks/useFocusOnMount';
+
 /** The three setup stage cues, in order, shown while the run sets the stage. */
 const STAGE_CUES = [
   { label: 'Reading your CV', sub: 'learning your lines' },
@@ -19,16 +21,17 @@ export function LoadingScreen({ cue }: LoadingScreenProps) {
   const activeIndex = STAGE_CUES.findIndex((c) => c.label === cue);
   // A cue past the three setup stages (e.g. "Loading the next question…") means all are done.
   const passedSetup = cue !== null && activeIndex === -1;
+  const heading = useFocusOnMount<HTMLHeadingElement>();
 
   return (
     <>
       <div className="act-slug">Setting the stage</div>
       <div className="rule-orn" />
       <div className="setting">
-        <h1 className="title-xl" style={{ fontSize: 'clamp(34px,5vw,54px)' }}>
+        <h1 ref={heading} tabIndex={-1} className="title-xl" style={{ fontSize: 'clamp(34px,5vw,54px)' }}>
           Places, please.
         </h1>
-        <ul className="cues">
+        <ul className="cues" role="status">
           {STAGE_CUES.map((stageCue, index) => {
             const state = passedSetup || index < activeIndex ? 'done' : index === activeIndex ? 'active' : '';
             return (

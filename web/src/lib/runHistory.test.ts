@@ -40,6 +40,17 @@ describe('run history store', () => {
     expect(loadHistory(fakeStorage({ [HISTORY_KEY]: 'not json' }))).toEqual([]);
   });
 
+  it('drops entries of the wrong shape, keeping the valid ones', () => {
+    // Valid JSON array, but a stale/partial schema mixed in: no bare cast should let
+    // an entry without a runId or a bad status into the sidebar.
+    const stored = JSON.stringify([
+      entry,
+      { role: 'no runId' },
+      { runId: 'r2', startedAt: '2026-07-06T11:00:00.000Z', status: 'bogus' },
+    ]);
+    expect(loadHistory(fakeStorage({ [HISTORY_KEY]: stored }))).toEqual([entry]);
+  });
+
   it('adds a new entry at the front', () => {
     const next = upsertEntry([], entry);
     expect(next).toEqual([entry]);
@@ -60,7 +71,7 @@ describe('run history store', () => {
     const next = updateEntry([entry], 'r1', { status: 'done', role: 'Staff PE' });
 
     expect(next[0]).toMatchObject({ status: 'done', role: 'Staff PE' });
-    expect(next[0].startedAt).toBe(entry.startedAt); // not clobbered
+    expect(next[0]?.startedAt).toBe(entry.startedAt); // not clobbered
   });
 
   it('is a no-op when the runId is unknown', () => {

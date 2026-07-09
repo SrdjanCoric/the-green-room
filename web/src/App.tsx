@@ -12,6 +12,7 @@ import {
   type PrepareInterviewResponse,
 } from './lib/api';
 import { createMastraInterviewClient } from './lib/mastraInterviewClient';
+import { cacheReport, loadCachedReport } from './lib/reportCache';
 import {
   loadHistory,
   type RunHistoryEntry,
@@ -19,10 +20,10 @@ import {
   updateEntry,
   upsertEntry,
 } from './lib/runHistory';
+import { safeSetItem } from './lib/storage';
 import type { InterviewClient, InterviewReport, StartInterviewInput } from './lib/types';
 
 const CANDIDATE_KEY = 'green-room:candidate';
-const REPORT_PREFIX = 'green-room:report:';
 
 type Route =
   | { name: 'setup' }
@@ -70,27 +71,30 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
-  const persistHistory = useCallback(
-    (entry: RunHistoryEntry) => {
-      setHistory((current) => {
-        const next = upsertEntry(current, entry);
-        saveHistory(store, next);
-        return next;
-      });
-    },
-    [store],
+  // The cached report for the current report route, parsed once per route change rather
+  // than on every render. Reparsing in the render path minted a fresh object each time,
+  // re-firing ReportScreen's scroll-to-top effect (which keys on report identity).
+  const cachedRouteReport = useMemo(
+    () => (route.name === 'report' ? loadCachedReport(store, route.runId) : null),
+    [route, store],
   );
 
-  const patchHistory = useCallback(
-    (runId: string, patch: Partial<RunHistoryEntry>) => {
-      setHistory((current) => {
-        const next = updateEntry(current, runId, patch);
-        saveHistory(store, next);
-        return next;
-      });
-    },
-    [store],
-  );
+  // The updaters stay pure — no storage write inside them — because StrictMode
+  // double-invokes an updater to surface impurity, which would double every write.
+  // Persistence is a single effect keyed on the history, below.
+  const persistHistory = useCallback((entry: RunHistoryEntry) => {
+    setHistory((current) => upsertEntry(current, entry));
+  }, []);
+
+  const patchHistory = useCallback((runId: string, patch: Partial<RunHistoryEntry>) => {
+    setHistory((current) => updateEntry(current, runId, patch));
+  }, []);
+
+  // Persist the history whenever it changes, outside the reducer updater. The first
+  // run writes the just-loaded history straight back (a harmless identity write).
+  useEffect(() => {
+    saveHistory(store, history);
+  }, [history, store]);
 
   // When the run finishes, cache the report and mark the run closed. This runs from
   // the stream-consumption path (an event); showing the notes is the effect below,
@@ -273,10 +277,10 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
       const viewed = viewedReport?.runId === route.runId ? viewedReport.report : null;
       const live = interview.state.runId === route.runId ? interview.state.report : null;
       // Back/forward and manual hash edits reach this route without a playbill click,
-      // so fall through to the cache before giving up on the report.
-      const shown = viewed ?? live ?? loadCachedReport(store, route.runId);
+      // so fall through to the (memoized) cache before giving up on the report.
+      const shown = viewed ?? live ?? cachedRouteReport;
       if (shown) return <ReportScreen report={shown} />;
-      return <SetupScreen onBegin={begin} busy={busy} error={prepError} />;
+      return <SetupScreen onBegin={(payload) => void begin(payload)} busy={busy} error={prepError} />;
     }
 
     if (route.name === 'interview' && interview.state.runId === route.runId) {
@@ -289,7 +293,7 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
         // workflow is waiting for instead of a dead end.
         return (
           <div>
-            <p className="ferr">{interview.state.error}</p>
+            <p className="ferr" role="alert">{interview.state.error}</p>
             <button className="deliver" type="button" onClick={interview.retry}>
               Retry the turn
             </button>
@@ -310,7 +314,7 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
       );
     }
 
-    return <SetupScreen onBegin={begin} busy={busy} error={prepError} />;
+    return <SetupScreen onBegin={(payload) => void begin(payload)} busy={busy} error={prepError} />;
   }
 }
 
@@ -330,20 +334,7 @@ function candidateId(store: Storage): string {
   const existing = store.getItem(CANDIDATE_KEY);
   if (existing) return existing;
   const id = crypto.randomUUID();
-  store.setItem(CANDIDATE_KEY, id);
+  // A failed write only means the id isn't durable across a reload — not fatal.
+  safeSetItem(store, CANDIDATE_KEY, id);
   return id;
-}
-
-function cacheReport(store: Storage, runId: string, report: InterviewReport): void {
-  store.setItem(`${REPORT_PREFIX}${runId}`, JSON.stringify(report));
-}
-
-function loadCachedReport(store: Storage, runId: string): InterviewReport | null {
-  const raw = store.getItem(`${REPORT_PREFIX}${runId}`);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as InterviewReport;
-  } catch {
-    return null;
-  }
 }

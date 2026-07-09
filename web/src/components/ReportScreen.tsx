@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { useFocusOnMount } from '../hooks/useFocusOnMount';
 import type { InterviewReport } from '../lib/types';
 
 export interface ReportScreenProps {
@@ -15,6 +16,7 @@ export function ReportScreen({ report, onSave }: ReportScreenProps) {
   const [tab, setTab] = useState<Tab>('coaching');
   const [saved, setSaved] = useState(false);
   const { coaching, transcript } = report;
+  const heading = useFocusOnMount<HTMLHeadingElement>();
 
   // The notes read from the top. Without this the page keeps the interview's scroll
   // position — the bottom, where the interview ended. Keyed on the report identity,
@@ -32,7 +34,7 @@ export function ReportScreen({ report, onSave }: ReportScreenProps) {
     <>
       <div className="act-slug">The director's notes</div>
       <div className="rule-orn" />
-      <h1 className="title-xl" style={{ fontSize: 'clamp(38px,6vw,68px)' }}>
+      <h1 ref={heading} tabIndex={-1} className="title-xl" style={{ fontSize: 'clamp(38px,6vw,68px)' }}>
         Notes.
       </h1>
 

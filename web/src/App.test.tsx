@@ -38,7 +38,9 @@ async function* closingResume(): AsyncGenerator<InterviewEvent> {
   yield { type: 'completed', report };
 }
 
-async function* noEvents(): AsyncGenerator<InterviewEvent> {}
+async function* noEvents(): AsyncGenerator<InterviewEvent> {
+  // A run with no live stream: observe settles from persisted state, yielding nothing.
+}
 
 function mockClient(): InterviewClient {
   return {
@@ -246,10 +248,11 @@ describe('App — full interview flow', () => {
       researchUrls: [],
       postingFetchFailedUrl: 'https://jobs.example.com/dead',
     }));
+    const start = vi.fn(() => {
+      throw new Error('start must not be called after a failed posting fetch');
+    });
     const client: InterviewClient = {
-      start: vi.fn(() => {
-        throw new Error('start must not be called after a failed posting fetch');
-      }),
+      start,
       resume: vi.fn(),
       observe: () => noEvents(),
     };
@@ -263,7 +266,7 @@ describe('App — full interview flow', () => {
     await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
 
     expect(await screen.findByText(/couldn't read the posting/i)).toBeInTheDocument();
-    expect(client.start).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
   });
 });
 

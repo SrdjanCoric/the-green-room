@@ -15,5 +15,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src/**/*", "vitest.config.ts", "eslint.config.js"]
+  "include": ["src/**/*", "shared/**/*", "vitest.config.ts", "eslint.config.js"]
 }

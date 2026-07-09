@@ -19,6 +19,7 @@ function liveState(): InterviewState {
     transcript: [{ question: 'Tell me about a conflict.', answer: 'I mediated it.' }],
     currentQuestion: 'What did you learn?',
     currentQuestionNumber: 2,
+    lastAnsweredQuestionNumber: 1,
     levelPrompt: null,
     cue: null,
     closingMessage: '',
@@ -29,8 +30,32 @@ function liveState(): InterviewState {
   };
 }
 
+/** A Storage whose writes always fail — a full quota or Safari private mode. */
+function fullStorage(): Storage {
+  return {
+    getItem: () => null,
+    setItem: () => {
+      throw new DOMException('quota exceeded', 'QuotaExceededError');
+    },
+    removeItem: () => undefined,
+    clear: () => undefined,
+    key: () => null,
+    length: 0,
+  };
+}
+
 describe('sessionStore', () => {
   beforeEach(() => window.localStorage.clear());
+
+  it('swallows a failed session write (full quota) instead of throwing into the caller', () => {
+    // saveSession runs on the stream/phase path; a QuotaExceededError must degrade to
+    // non-resumable, never propagate as a stream failure.
+    expect(() => saveSession(fullStorage(), RUN_ID, liveState())).not.toThrow();
+  });
+
+  it('swallows a failed run-meta write (full quota) instead of throwing into the caller', () => {
+    expect(() => saveRunMeta(fullStorage(), RUN_ID, { offset: 3 })).not.toThrow();
+  });
 
   it('round-trips the interview state for a run', () => {
     saveSession(window.localStorage, RUN_ID, liveState());

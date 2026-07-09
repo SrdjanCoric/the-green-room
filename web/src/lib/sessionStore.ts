@@ -1,4 +1,5 @@
 import type { InterviewPhase, InterviewState } from './interviewMachine';
+import { safeSetItem } from './storage';
 
 /**
  * Per-run interview-state snapshots, keyed by run id. The reducer state is persisted
@@ -24,7 +25,7 @@ const PHASES: ReadonlySet<string> = new Set<InterviewPhase>([
 
 /** Persist the interview state for a run. */
 export function saveSession(storage: Storage, runId: string, state: InterviewState): void {
-  storage.setItem(`${SESSION_PREFIX}${runId}`, JSON.stringify(state));
+  safeSetItem(storage, `${SESSION_PREFIX}${runId}`, JSON.stringify(state));
 }
 
 /**
@@ -86,7 +87,7 @@ const META_PREFIX = 'green-room:run-meta:';
 
 /** Persist the run's stream bookkeeping. */
 export function saveRunMeta(storage: Storage, runId: string, meta: RunMeta): void {
-  storage.setItem(`${META_PREFIX}${runId}`, JSON.stringify(meta));
+  safeSetItem(storage, `${META_PREFIX}${runId}`, JSON.stringify(meta));
 }
 
 /** Read the run's stream bookkeeping; a missing or corrupt record means a fresh start. */

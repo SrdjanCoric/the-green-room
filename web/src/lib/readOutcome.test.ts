@@ -120,6 +120,36 @@ describe('readOutcome', () => {
     });
   });
 
+  it('populates role and company from the real workflow result field (roleContext)', () => {
+    // The workflow result carries the role under `roleContext` (roleContextSchema),
+    // never a bare `role`. A run that resolved a posting must surface both onto the
+    // report the sidebar and screen meta read.
+    const event = readOutcome({
+      status: 'success',
+      result: {
+        targetLevel: 'senior',
+        reportPath: '/data/reports/y.md',
+        transcript: [{ question: 'Q1', answer: 'A1' }],
+        roleContext: {
+          company: 'Globex',
+          role: 'Staff Engineer',
+          competencies: [{ name: 'System design', weight: 5 }],
+        },
+        coaching: {
+          summary: 'Solid.',
+          answerAdvice: [],
+          drills: [],
+          studyPlan: 'Keep going.',
+        },
+      },
+    });
+
+    expect(event).toMatchObject({
+      type: 'completed',
+      report: { role: 'Staff Engineer', company: 'Globex' },
+    });
+  });
+
   it('reports a failure with the error message', () => {
     const event = readOutcome({ status: 'failed', error: { message: 'boom' } });
     expect(event).toEqual({ type: 'failed', message: 'boom' });
@@ -127,6 +157,7 @@ describe('readOutcome', () => {
 
   it('falls back to a generic message when a failure carries no detail', () => {
     const event = readOutcome({ status: 'failed' });
-    expect(event).toEqual({ type: 'failed', message: expect.stringMatching(/interview/i) });
+    expect(event).toMatchObject({ type: 'failed' });
+    if (event?.type === 'failed') expect(event.message).toMatch(/interview/i);
   });
 });

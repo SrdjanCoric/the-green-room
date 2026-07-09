@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 
+import { useFocusOnMount } from '../hooks/useFocusOnMount';
 import type { EnsembleSelection, PostingInputKind } from '../lib/types';
 
 /** What the setup form hands up when it validates. */
@@ -39,6 +40,7 @@ export function SetupScreen({ onBegin, busy = false, error }: SetupScreenProps) 
   const [cvError, setCvError] = useState(false);
   const [jobError, setJobError] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const heading = useFocusOnMount<HTMLHeadingElement>();
 
   const job = (postingKind === 'link' ? link : paste).trim();
 
@@ -62,7 +64,7 @@ export function SetupScreen({ onBegin, busy = false, error }: SetupScreenProps) 
     <>
       <div className="act-slug">The audition</div>
       <div className="rule-orn" />
-      <h1 className="title-xl">
+      <h1 ref={heading} tabIndex={-1} className="title-xl">
         You, <span className="it">off book.</span>
       </h1>
       <p className="lede">
@@ -199,7 +201,11 @@ export function SetupScreen({ onBegin, busy = false, error }: SetupScreenProps) 
           </div>
         </details>
 
-        {error && <div className="ferr">{error}</div>}
+        {error && (
+          <div className="ferr" role="alert">
+            {error}
+          </div>
+        )}
 
         <button className="curtain-btn" type="submit" disabled={busy}>
           {busy ? 'Setting the stage…' : 'Raise the curtain'}

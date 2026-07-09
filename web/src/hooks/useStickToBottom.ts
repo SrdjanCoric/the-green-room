@@ -65,8 +65,15 @@ export function useStickToBottom({ beatTick }: { beatTick: unknown }): FollowToB
   }, []);
 
   useEffect(() => {
-    follow('smooth');
+    // A scene beat glides — unless the user asked for reduced motion, when it jumps.
+    follow(prefersReducedMotion() ? 'instant' : 'smooth');
   }, [beatTick, follow]);
 
   return follow;
+}
+
+/** Whether the OS asks for reduced motion, safe when `matchMedia` is absent. */
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }

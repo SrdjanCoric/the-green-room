@@ -30,6 +30,14 @@ export interface InterviewState {
   currentQuestion: string;
   /** 1-based index of the current question. */
   currentQuestionNumber: number;
+  /**
+   * 1-based index of the most recently *answered* question — the number carried by the
+   * trailing transcript entry. Keys the reconnect orphan check: only when the run
+   * re-suspends on this exact question was the trailing answer lost before the run
+   * received it. `0` until the first answer. Distinct from `currentQuestionNumber`,
+   * which tracks the question in play and so always matches a re-emitted suspend.
+   */
+  lastAnsweredQuestionNumber: number;
   /** The prompt shown when the run suspends for a target level. */
   levelPrompt: string | null;
   /** A between-turns status line ("Choosing the next question…"). */
@@ -55,6 +63,7 @@ export const initialInterviewState: InterviewState = {
   transcript: [],
   currentQuestion: '',
   currentQuestionNumber: 0,
+  lastAnsweredQuestionNumber: 0,
   levelPrompt: null,
   cue: null,
   closingMessage: '',
@@ -108,6 +117,9 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
         ...state,
         phase: 'assessing',
         transcript: [...state.transcript, { question: state.currentQuestion, answer: action.answer }],
+        // The turn just answered is now the last answered turn — its number keys the
+        // orphan check if a reload lands before the run receives this answer.
+        lastAnsweredQuestionNumber: state.currentQuestionNumber,
         currentQuestion: '',
         cue: 'Weighing your answer…',
       };
@@ -184,15 +196,20 @@ function applyEvent(state: InterviewState, event: InterviewEvent): InterviewStat
       if (event.suspend.kind === 'failure') {
         return { ...state, phase: 'turnFailed', error: event.suspend.reason, cue: null };
       }
-      // A restored snapshot can hold an answer the run never received (the page
-      // died between submit and the resume reaching the server). If the run is
-      // still suspended on that same question, the trailing entry is that lost
-      // answer — drop it so the re-answered turn isn't recorded twice.
+      // A restored snapshot can hold an answer the run never received (the page died
+      // between submit and the resume reaching the server). If the run re-suspends on
+      // the very question that trailing answer was for, it's an orphan — drop it so the
+      // re-answered turn isn't recorded twice. The match is keyed on the last *answered*
+      // question's number, the turn's exact discriminator: keying on the question text
+      // would miss a retried attempt that re-asks with drifted wording, and keying on
+      // `currentQuestionNumber` would wrongly drop a real turn on every reconnect, since
+      // that number always equals the re-emitted suspend's.
       return {
         ...state,
         phase: 'awaitingAnswer',
         transcript:
-          state.transcript.at(-1)?.question === event.suspend.question
+          state.transcript.length > 0 &&
+          state.lastAnsweredQuestionNumber === event.suspend.questionNumber
             ? state.transcript.slice(0, -1)
             : state.transcript,
         currentQuestion: event.suspend.question,
