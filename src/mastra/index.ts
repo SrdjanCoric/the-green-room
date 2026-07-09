@@ -12,6 +12,7 @@ import { researchAgent } from './agents/research';
 import { roleBuilderAgent } from './agents/role-builder';
 import { KNOWLEDGE_VECTOR_STORE_NAME } from './knowledge/config';
 import { knowledgeVectorStore } from './knowledge/vector-store';
+import { monitoringScorers } from './scorers';
 import { prepareInterviewRoute } from './server/prepare-interview-route';
 import { storage } from './storage';
 import { streamReplayCache } from './stream-cache';
@@ -44,6 +45,9 @@ export const mastra = new Mastra({
     coach: coachAgent,
   },
   workflows: { interviewWorkflow },
+  // Monitoring scorers registered for Studio's catalog and `runEvals`; the interviewer
+  // and grader also attach sampled copies directly, which is what drives live scoring.
+  scorers: monitoringScorers,
   vectors: { [KNOWLEDGE_VECTOR_STORE_NAME]: knowledgeVectorStore },
   storage,
   // Backs resumable streaming: the server caches delivered workflow stream chunks by

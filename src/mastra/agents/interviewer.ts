@@ -1,6 +1,7 @@
 import { Agent } from '@mastra/core/agent';
 
 import { getTierModel } from '../model-config';
+import { buildPromptAlignmentScorers } from '../scorers';
 
 /**
  * The house voice every candidate-facing line follows. It is the write-well voice spoken
@@ -96,4 +97,6 @@ export const interviewerAgent = new Agent({
   description: "Phrases the director's decision as the next interview question, in the house voice.",
   instructions: INTERVIEWER_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'fast'),
+  // Sampled prompt-alignment monitoring → Studio; never gates the question asked.
+  scorers: buildPromptAlignmentScorers,
 });
