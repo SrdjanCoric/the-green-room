@@ -94,7 +94,13 @@ function isProfileEmpty(profile: CandidateProfile): boolean {
   );
 }
 
-/** Ensure a thread row exists so resource-scoped working memory has somewhere to attach. */
+/**
+ * Ensure a thread row exists for the interview session. Resource-scoped working
+ * memory does not need one — `getWorkingMemory`/`updateWorkingMemory` read and write
+ * the resource row directly, keyed by `resourceId`, never touching a thread. The row
+ * exists so Studio has a session to surface and so the session is modeled as a thread
+ * consistent with the workflow's `threadId`.
+ */
 async function ensureThread(
   memory: CandidateProfileStore,
   resourceId: string,
