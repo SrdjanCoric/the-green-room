@@ -24,7 +24,16 @@ import { PROMPT_ALIGNMENT_SCORER_ID, createPromptAlignmentScorer } from './promp
  * The user-facing grade stays the workflow's grade step; nothing here gates or rewrites it.
  */
 
-/** Record key both agents attach their prompt-alignment monitor under. */
+/**
+ * Record key both agents attach their prompt-alignment monitor under. This differs from the
+ * catalog's registration key ({@link PROMPT_ALIGNMENT_SCORER_ID}) on purpose, and the mismatch
+ * is safe: Mastra's `onScorerRun` hook persists a score under the scorer object's own `id`, not
+ * the record key it was registered under, and the prebuilt `createPromptAlignmentScorerLLM` (which
+ * {@link createPromptAlignmentScorer} wraps) builds every copy with the same hardcoded id
+ * `'prompt-alignment-scorer'`. So the agent-attached copies and the instance catalog entry coalesce
+ * to one `mastra_scorers` identity — one row in Studio, not two.
+ * `scorer-id-coalescing.test.ts` guards this with a real storage round-trip.
+ */
 export const PROMPT_ALIGNMENT_KEY = 'promptAlignment';
 
 /** The LLM judge costs tokens, so it scores a fraction of runs — visibility against cost. */
