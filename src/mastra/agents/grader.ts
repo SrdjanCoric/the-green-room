@@ -1,6 +1,7 @@
 import { Agent } from '@mastra/core/agent';
 
 import { getTierModel } from '../model-config';
+import { buildPromptAlignmentScorers } from '../scorers';
 
 export const GRADER_SYSTEM_PROMPT = `You are the grader for a finished practice behavioral interview. In one pass over the whole transcript you score every answer the candidate gave, against the rubric below. Your output is internal feedback, read later by a coach and shown to the candidate as scores; it is the final word on the answers, so where an earlier in-session read disagrees with you, you are right.
 <rubric>
@@ -33,4 +34,8 @@ export const graderAgent = new Agent({
     'Scores every transcript answer against the STAR rubric, calibrated to the target level.',
   instructions: GRADER_SYSTEM_PROMPT,
   model: ({ requestContext }) => getTierModel(requestContext, 'smart'),
+  // Sampled prompt-alignment monitoring → Studio; never gates or rewrites the grade the
+  // candidate sees, which stays the workflow's grade step. The grader's label-based
+  // agreement eval lives in the runEvals suite, where reference labels exist.
+  scorers: buildPromptAlignmentScorers,
 });

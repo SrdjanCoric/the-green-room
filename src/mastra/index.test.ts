@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import { mastra } from './index';
 import { KNOWLEDGE_VECTOR_STORE_NAME } from './knowledge/config';
+import {
+  GRADER_AGREEMENT_SCORER_ID,
+  PROMPT_ALIGNMENT_SCORER_ID,
+} from './scorers';
 import { streamReplayCache } from './stream-cache';
 
 describe('mastra workflow registration', () => {
@@ -28,5 +32,13 @@ describe('mastra resumable streaming', () => {
 describe('mastra vector store registration', () => {
   it('registers the knowledge vector store so the coach retrieval tool can resolve it by name', () => {
     expect(mastra.getVector(KNOWLEDGE_VECTOR_STORE_NAME)).toBeDefined();
+  });
+});
+
+describe('mastra monitoring scorer registration', () => {
+  it('registers the prompt-alignment monitor and the grader-agreement eval in the Studio catalog', () => {
+    const scorerIds = Object.keys(mastra.listScorers() ?? {});
+    expect(scorerIds).toContain(PROMPT_ALIGNMENT_SCORER_ID);
+    expect(scorerIds).toContain(GRADER_AGREEMENT_SCORER_ID);
   });
 });

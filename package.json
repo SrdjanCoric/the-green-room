@@ -13,6 +13,7 @@
     "ingest": "tsx src/scripts/ingest.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:evals": "RUN_LIVE_EVALS=1 vitest run src/mastra/scorers",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },
@@ -20,6 +21,7 @@
     "@clack/prompts": "^0.11.0",
     "@libsql/client": "^0.17.4",
     "@mastra/core": "^1.50.0",
+    "@mastra/evals": "^1.5.1",
     "@mastra/libsql": "^1.15.1",
     "@mastra/loggers": "^1.2.0",
     "@mastra/memory": "^1.22.1",
