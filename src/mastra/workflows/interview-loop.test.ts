@@ -10,17 +10,19 @@ import { candidateProfileSchema } from '../schemas/candidate-profile';
 import { EMPTY_COMPANY_BRIEF } from '../schemas/company-brief';
 import { directorDecisionSchema } from '../schemas/director-decision';
 import { roleContextSchema } from '../schemas/role-context';
-import type { BrainFactory } from '../interview/adaptive-brain';
-import { capLimitsSchema } from '../interview/interview-caps';
+import type { BrainFactory, ClosingFactory } from '../interview/adaptive-brain';
+import { INITIAL_COVERAGE, capLimitsSchema } from '../interview/interview-caps';
 import { buildModelRequestContext, getTierModel, resolveModelTiers } from '../model-config';
 import {
   asInterviewSuspend,
+  closedInterviewStateSchema,
   interviewStateSchema,
   readSuspendPayload,
   researchOutputSchema,
 } from './interview-state';
 import {
   collectLevelStep,
+  createClosingStep,
   createInterviewTurnStep,
   interviewLoopDone,
 } from './steps/interview-loop';
@@ -391,6 +393,118 @@ describe('model-tier inheritance across resume', () => {
     const resumed = await reconnected.resume({ resumeData: { answer: 'Answer one.' } });
     expect(resumed.status).toBe('suspended');
     expect(seenSmartTiers.at(-1)).toBe('probe/smart-model-x');
+  });
+});
+
+// The static line the closing step falls back to when the agent fails, over a
+// non-empty transcript. Mirrors `staticClosing` for a transcript with turns.
+const STATIC_CLOSING = 'That covers what I wanted to ask. Thanks for walking me through it today.';
+
+/** A single text chunk (`text-start`/`text-delta`/`text-end`) the closing step wrote. */
+interface EmittedTextChunk {
+  type: string;
+  text?: string;
+}
+
+/**
+ * Pull the closing step's own text chunks out of a captured run stream. A step's
+ * `writer.write` chunks arrive wrapped in a `workflow-step-output` envelope under
+ * `payload.output`; this unwraps them and keeps only the `text-*` chunks, in order.
+ */
+function emittedTextChunks(chunks: unknown[]): EmittedTextChunk[] {
+  const out: EmittedTextChunk[] = [];
+  for (const chunk of chunks) {
+    if (typeof chunk !== 'object' || chunk === null) continue;
+    const record = chunk as {
+      type?: string;
+      payload?: { output?: { type?: string; payload?: { text?: string } } };
+    };
+    if (record.type !== 'workflow-step-output') continue;
+    const output = record.payload?.output;
+    if (!output || typeof output.type !== 'string' || !output.type.startsWith('text-')) continue;
+    out.push({ type: output.type, text: output.payload?.text });
+  }
+  return out;
+}
+
+/** A finished interview state ready for the closing step, with a non-empty transcript. */
+function closingSeed() {
+  return interviewStateSchema.parse({
+    ...seed({ targetLevel: 'senior' }),
+    transcript: [{ question: 'Walk me through a hard project.', answer: 'I led the migration.' }],
+    coverage: INITIAL_COVERAGE,
+    done: true,
+  });
+}
+
+/** Run a one-step closing workflow to completion, capturing its stream chunks. */
+async function runClosing(factory: ClosingFactory) {
+  const step = createClosingStep(factory);
+  const workflow = createWorkflow({
+    id: 'closingBalanceTest',
+    inputSchema: interviewStateSchema,
+    outputSchema: closedInterviewStateSchema,
+  })
+    .then(step)
+    .commit();
+  const closingMastra = new Mastra({
+    workflows: { closingBalanceTest: workflow },
+    storage: new LibSQLStore({ id: 'closing-balance-test', url: ':memory:' }),
+  });
+  const run = await closingMastra.getWorkflow('closingBalanceTest').createRun();
+  const output = run.stream({ inputData: closingSeed() });
+  const chunks: unknown[] = [];
+  for await (const chunk of output.fullStream) chunks.push(chunk);
+  const result = await output.result;
+  return { chunks, result };
+}
+
+describe('closing step stream balance', () => {
+  it('emits a self-contained start/delta/end block on the fallback path so the failure branch leaves nothing open', async () => {
+    // The agent fails before streaming anything: only the fallback branch writes.
+    const failingClosing: ClosingFactory = () => async () => {
+      throw new Error('closing agent unavailable');
+    };
+
+    const { chunks, result } = await runClosing(failingClosing);
+
+    expect(result.status).toBe('success');
+    if (result.status !== 'success') return;
+    expect(result.result.closingMessage).toBe(STATIC_CLOSING);
+
+    // The fallback writes a self-contained, balanced block: start, the static line, end.
+    const text = emittedTextChunks(chunks);
+    expect(text.map((c) => c.type)).toEqual(['text-start', 'text-delta', 'text-end']);
+    expect(text[1]?.text).toBe(STATIC_CLOSING);
+  });
+
+  it('re-opens with a reset text-start after a partial stream so the client drops the truncated goodbye', async () => {
+    // The agent streams a partial goodbye, then dies mid-stream — leaving an open block.
+    const partialThenFail: ClosingFactory = (_registry, _requestContext, sink) => async () => {
+      await sink?.write({ type: 'text-start', payload: {} });
+      await sink?.write({ type: 'text-delta', payload: { text: 'A truncated goodbye that never fin' } });
+      throw new Error('closing agent died mid-stream');
+    };
+
+    const { chunks, result } = await runClosing(partialThenFail);
+
+    expect(result.status).toBe('success');
+    if (result.status !== 'success') return;
+    expect(result.result.closingMessage).toBe(STATIC_CLOSING);
+
+    // The partial (start + delta) is followed by a fresh start — the reset marker the
+    // client keys on to discard the truncated text — then the static line and a matched
+    // end. No text block is left open.
+    const text = emittedTextChunks(chunks);
+    expect(text.map((c) => c.type)).toEqual([
+      'text-start',
+      'text-delta',
+      'text-start',
+      'text-delta',
+      'text-end',
+    ]);
+    expect(text.at(-2)?.text).toBe(STATIC_CLOSING);
+    expect(text.at(-1)?.type).toBe('text-end');
   });
 });
 

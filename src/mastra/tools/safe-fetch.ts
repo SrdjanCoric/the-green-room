@@ -148,6 +148,18 @@ export async function readBodyCapped(
   maxBytes: number,
   resourceLabel: string,
 ): Promise<string> {
+  // Fast rejection: if the server declares a body larger than the cap, refuse before
+  // reading a single byte. This is what preserves the "cannot exhaust memory before we
+  // notice" guarantee on the no-body-stream branch below — where `response.text()` would
+  // otherwise buffer the whole body first — and it also short-circuits the streaming
+  // branch instead of reading chunks up to the cap. A missing or unparseable header falls
+  // through to the incremental checks: content-length can be absent (chunked) or, under
+  // compression, smaller than the decoded text, so it is a guard, never the sole cap.
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error(`${resourceLabel} exceeds the ${maxBytes}-byte size cap.`);
+  }
+
   const body = response.body;
   if (!body) {
     const text = await response.text();

@@ -256,11 +256,18 @@ export function createClosingStep(makeClosing: ClosingFactory) {
           // The fallback below stands; grading matters more than the goodbye.
         }
       }
-      // The agent was skipped or failed — possibly after streaming a partial goodbye.
-      // Put the static line on the run stream too, so a watching client converges on
-      // the same closing the run records instead of keeping truncated text.
+      // The agent was skipped or failed — possibly after streaming a partial goodbye
+      // that left a text block open. Put the static line on the run stream too as its
+      // own self-contained block: the leading `text-start` is the reset marker a client
+      // keys on to discard any truncated text and converge on the recorded closing, and
+      // the trailing `text-end` closes this block so the failure path doesn't stack a
+      // second open block on top of the agent's partial one. (The success path — like
+      // every streamed reply here — emits only start + deltas and relies on the same
+      // start-marker reset, not on `text-end`; this end is what keeps the *failure* path
+      // from compounding, not a claim that every block system-wide is closed.)
       await writer.write({ type: 'text-start', payload: {} });
       await writer.write({ type: 'text-delta', payload: { text: fallback } });
+      await writer.write({ type: 'text-end', payload: {} });
       return { ...inputData, closingMessage: fallback };
     },
   });

@@ -27,7 +27,10 @@ export const RETRIEVAL_MODEL_CONTEXT_KEY = 'model';
  * a lazy fallback for a direct/Studio invocation that sets no override; it is a getter
  * because constructing the real model validates `OPENAI_API_KEY`, while this tool is
  * imported by the Anthropic-only interview flow (and the whole test suite), so the key
- * is needed only if the fallback is ever actually reached.
+ * is needed only if the fallback is ever actually reached. This relies on
+ * `createVectorQueryTool` reading `.model` at execute time, not at construction;
+ * `coach-retrieval-import.test.ts` guards that contract so a `@mastra/rag` bump which read
+ * `.model` eagerly — reinstating an import-time key check — is caught.
  */
 export const coachRetrievalTool = createVectorQueryTool({
   id: 'retrieve-answer-guidance',

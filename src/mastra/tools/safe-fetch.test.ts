@@ -1,9 +1,49 @@
 import { describe, expect, it } from 'vitest';
+import type { Response as UndiciResponse } from 'undici';
 
-import { UnsafePostingUrlError, isGlobalIp, resolveSafeTarget } from './safe-fetch';
+import { UnsafePostingUrlError, isGlobalIp, readBodyCapped, resolveSafeTarget } from './safe-fetch';
 
 /** A lookup that always resolves to one global address. */
 const globalLookup = async () => ['93.184.216.34'];
+
+/**
+ * A minimal response double exposing only what {@link readBodyCapped} reads: an optional
+ * body stream, a `content-length` header, and `text()`. Typed through `unknown` because a
+ * full undici `Response` is far larger than the three members under test.
+ */
+function responseDouble(opts: {
+  body?: ReadableStream<Uint8Array> | null;
+  contentLength?: string;
+  text?: () => Promise<string>;
+}): UndiciResponse {
+  return {
+    body: opts.body ?? null,
+    headers: {
+      get: (name: string) =>
+        name.toLowerCase() === 'content-length' ? (opts.contentLength ?? null) : null,
+    },
+    text: opts.text ?? (async () => ''),
+  } as unknown as UndiciResponse;
+}
+
+/**
+ * A single-chunk byte stream of `size` zero bytes; `onRead` fires when a chunk is pulled.
+ * `highWaterMark: 0` keeps the stream from eagerly pulling to fill its queue at
+ * construction, so `onRead` reflects an actual `read()` — the signal a test uses to prove
+ * the body was never touched.
+ */
+function streamOfBytes(size: number, onRead?: () => void): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        onRead?.();
+        controller.enqueue(new Uint8Array(size));
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
 
 describe('isGlobalIp', () => {
   it('rejects loopback, private, link-local, and IPv6 local ranges', () => {
@@ -69,5 +109,53 @@ describe('resolveSafeTarget', () => {
     await expect(
       resolveSafeTarget('https://internal.example.com/role', async () => ['10.0.0.1']),
     ).rejects.toBeInstanceOf(UnsafePostingUrlError);
+  });
+});
+
+describe('readBodyCapped size enforcement', () => {
+  it('rejects an over-cap body declared by content-length without buffering it (no-body path)', async () => {
+    // If the pre-check fails to fire, the no-body branch calls text() and this throws a
+    // distinct error — so a passing size-cap rejection proves the body was never read.
+    const response = responseDouble({
+      body: null,
+      contentLength: '1000',
+      text: async () => {
+        throw new Error('the body must not be buffered once content-length exceeds the cap');
+      },
+    });
+
+    await expect(readBodyCapped(response, 100, 'The page')).rejects.toThrow(/100-byte size cap/);
+  });
+
+  it('rejects an over-cap body declared by content-length before reading the stream', async () => {
+    let read = false;
+    const body = streamOfBytes(1000, () => {
+      read = true;
+    });
+    const response = responseDouble({ body, contentLength: '1000' });
+
+    await expect(readBodyCapped(response, 100, 'The page')).rejects.toThrow(/100-byte size cap/);
+    // The declared length rejected it before the first chunk was pulled.
+    expect(read).toBe(false);
+  });
+
+  it('still caps an over-cap streamed body that declares no content-length', async () => {
+    const response = responseDouble({ body: streamOfBytes(1000) });
+
+    await expect(readBodyCapped(response, 100, 'The page')).rejects.toThrow(/100-byte size cap/);
+  });
+
+  it('returns a within-cap body on the no-body path', async () => {
+    const response = responseDouble({ body: null, text: async () => 'a short page' });
+
+    await expect(readBodyCapped(response, 100, 'The page')).resolves.toBe('a short page');
+  });
+
+  it('reads a streamed body whose content-length is within the cap', async () => {
+    const response = responseDouble({ body: streamOfBytes(50), contentLength: '50' });
+
+    const result = await readBodyCapped(response, 100, 'The page');
+    // 50 zero bytes decode to 50 NUL characters — within the 100-byte cap.
+    expect(result).toHaveLength(50);
   });
 });

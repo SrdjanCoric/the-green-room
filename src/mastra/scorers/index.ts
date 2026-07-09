@@ -53,6 +53,16 @@ export function buildPromptAlignmentScorers({
  * them and `runEvals` can reach them by name: the live prompt-alignment judge (built with
  * the default smart-tier model; the agent-attached copies follow the live run's tier and
  * share this id) and the grader-agreement eval scorer.
+ *
+ * This is built at module import (every CLI invocation loads it via `mastra/index`), which
+ * is safe to do eagerly: `resolveModelTiers().smart` is a model-router *string*, and
+ * `createPromptAlignmentScorer` hands that string to the judge config unresolved. Mastra
+ * turns the string into a provider client — and validates its API key — only when the
+ * scorer runs, so import triggers no provider key check. This is unlike
+ * `ModelRouterEmbeddingModel`, which validates `OPENAI_API_KEY` in its constructor and so is
+ * deferred behind a lazy getter in `knowledge/embedding.ts`; there is no equivalent eager
+ * client here to defer. `catalog-lazy-model.test.ts` guards the property — if a future
+ * `@mastra/evals` made `createScorer` instantiate the judge model eagerly, that test fails.
  */
 export const monitoringScorers = {
   [PROMPT_ALIGNMENT_SCORER_ID]: createPromptAlignmentScorer(resolveModelTiers().smart),
