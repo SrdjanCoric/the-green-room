@@ -10,6 +10,7 @@ export interface AnswerTranscriptionSnapshot {
   phase: AnswerTranscriptionPhase;
   text: string;
   elapsedSeconds: number;
+  canContinue: boolean;
   status: string;
 }
 
@@ -56,6 +57,7 @@ const initialSnapshot: AnswerTranscriptionSnapshot = {
   phase: 'ready',
   text: '',
   elapsedSeconds: 0,
+  canContinue: true,
   status: 'Ready to dictate.',
 };
 const systemClock: TranscriptionClock = {
@@ -66,7 +68,7 @@ const systemClock: TranscriptionClock = {
   clearTimeout: (id) => clearTimeout(id),
 };
 
-/** Owns one dictated answer segment and every external resource used to capture it. */
+/** Owns one dictated answer and the isolated realtime resources for its active segment. */
 export class AnswerTranscriptionController {
   readonly #getToken: (signal: AbortSignal) => Promise<string>;
   readonly #realtime: RealtimeTranscriptionClient;
@@ -81,7 +83,9 @@ export class AnswerTranscriptionController {
   #abort: AbortController | null = null;
   #session: RealtimeTranscriptionSession | null = null;
   #attempt = 0;
-  #startedAt = 0;
+  #completedSegments = 0;
+  #recordedMs = 0;
+  #startedAt: number | null = null;
   #elapsedTimer: ReturnType<typeof setInterval> | null = null;
   #durationTimer: ReturnType<typeof setTimeout> | null = null;
   #finalizationTimer: ReturnType<typeof setTimeout> | null = null;
@@ -112,7 +116,7 @@ export class AnswerTranscriptionController {
       this.#snapshot.phase === 'connecting' ||
       this.#snapshot.phase === 'listening' ||
       this.#snapshot.phase === 'finalizing' ||
-      this.#snapshot.phase === 'stopped'
+      this.#recordedMs >= this.#maxDurationMs
     ) {
       return;
     }
@@ -126,7 +130,8 @@ export class AnswerTranscriptionController {
     this.#set({
       phase: 'connecting',
       text: this.#baseText,
-      elapsedSeconds: 0,
+      elapsedSeconds: this.#elapsedSeconds(),
+      canContinue: true,
       status: 'Connecting to dictation…',
     });
 
@@ -168,7 +173,7 @@ export class AnswerTranscriptionController {
 
   stop(reason: 'explicit' | 'limit' = 'explicit'): void {
     if (this.#snapshot.phase !== 'listening' || !this.#session) return;
-    this.#updateElapsed();
+    this.#finishCapture();
     this.#clearCaptureTimers();
     this.#set({
       ...this.#snapshot,
@@ -195,10 +200,7 @@ export class AnswerTranscriptionController {
   abort(): void {
     ++this.#attempt;
     this.#releaseResources();
-    this.#baseText = '';
-    this.#committed = [];
-    this.#partial = '';
-    this.#startedAt = 0;
+    this.#resetAnswerState();
     this.#set(initialSnapshot);
   }
 
@@ -206,7 +208,8 @@ export class AnswerTranscriptionController {
     const text = this.#snapshot.text;
     ++this.#attempt;
     this.#releaseResources();
-    this.#set({ ...this.#snapshot, phase: 'stopped', text });
+    this.#resetAnswerState();
+    this.#set({ ...this.#snapshot, phase: 'stopped', text, elapsedSeconds: 0 });
     return text;
   }
 
@@ -215,7 +218,10 @@ export class AnswerTranscriptionController {
     this.#startedAt = this.#clock.now();
     this.#set({ ...this.#snapshot, phase: 'listening', status: 'Listening…' });
     this.#elapsedTimer = this.#clock.setInterval(() => this.#updateElapsed(), 1_000);
-    this.#durationTimer = this.#clock.setTimeout(() => this.stop('limit'), this.#maxDurationMs);
+    this.#durationTimer = this.#clock.setTimeout(
+      () => this.stop('limit'),
+      this.#maxDurationMs - this.#recordedMs,
+    );
   }
 
   #commitTranscript(attempt: number, text: string): void {
@@ -230,6 +236,7 @@ export class AnswerTranscriptionController {
       this.#clearFinalizationTimer();
       this.#closeSession();
       ++this.#attempt;
+      ++this.#completedSegments;
       this.#set({
         ...this.#snapshot,
         phase: 'stopped',
@@ -239,14 +246,27 @@ export class AnswerTranscriptionController {
   }
 
   #updateElapsed(): void {
-    if (!this.#startedAt) return;
-    const elapsedSeconds = Math.min(
-      Math.floor((this.#clock.now() - this.#startedAt) / 1_000),
-      Math.ceil(this.#maxDurationMs / 1_000),
-    );
+    const elapsedSeconds = this.#elapsedSeconds();
     if (elapsedSeconds !== this.#snapshot.elapsedSeconds) {
       this.#set({ ...this.#snapshot, elapsedSeconds });
     }
+  }
+
+  #finishCapture(): void {
+    if (this.#startedAt === null) return;
+    this.#recordedMs = this.#elapsedMs();
+    this.#startedAt = null;
+    this.#updateElapsed();
+  }
+
+  #elapsedSeconds(): number {
+    return Math.floor(this.#elapsedMs() / 1_000);
+  }
+
+  #elapsedMs(): number {
+    const activeMs =
+      this.#startedAt === null ? 0 : Math.max(0, this.#clock.now() - this.#startedAt);
+    return Math.min(this.#recordedMs + activeMs, this.#maxDurationMs);
   }
 
   #publishText(): void {
@@ -258,11 +278,30 @@ export class AnswerTranscriptionController {
 
   #fail(status: string): void {
     ++this.#attempt;
+    this.#finishCapture();
     this.#clearTimers();
     this.#closeSession();
     this.#abort?.abort();
     this.#abort = null;
-    this.#set({ ...this.#snapshot, phase: 'failed', status });
+    if (this.#completedSegments > 0) {
+      this.#committed = [];
+      this.#partial = '';
+    }
+    this.#set({
+      ...this.#snapshot,
+      phase: 'failed',
+      text: this.#completedSegments > 0 ? this.#baseText : this.#snapshot.text,
+      status,
+    });
+  }
+
+  #resetAnswerState(): void {
+    this.#baseText = '';
+    this.#committed = [];
+    this.#partial = '';
+    this.#completedSegments = 0;
+    this.#recordedMs = 0;
+    this.#startedAt = null;
   }
 
   #releaseResources(): void {
@@ -300,7 +339,10 @@ export class AnswerTranscriptionController {
   }
 
   #set(snapshot: AnswerTranscriptionSnapshot): void {
-    this.#snapshot = snapshot;
+    this.#snapshot = {
+      ...snapshot,
+      canContinue: this.#elapsedMs() < this.#maxDurationMs,
+    };
     for (const listener of this.#listeners) listener();
   }
 }

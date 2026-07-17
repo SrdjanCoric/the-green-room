@@ -141,11 +141,25 @@ describe('App — full interview flow', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /stop answering/i }));
     act(() => transcription.handlers()?.onCommitted('I led the migration.'));
-    await userEvent.type(screen.getByLabelText(/your answer/i), ' It cut deploy time in half.');
+    const answer = screen.getByLabelText(/your answer/i);
+    await userEvent.clear(answer);
+    await userEvent.type(answer, 'I personally led the migration.');
+    await userEvent.click(screen.getByRole('button', { name: /continue answering/i }));
+    act(() => transcription.handlers()?.onSessionStarted());
+    act(() => transcription.handlers()?.onPartial('It cut deploy time'));
+
+    const duringSecondSegment = Array.from(
+      { length: window.localStorage.length },
+      (_, index) => window.localStorage.getItem(window.localStorage.key(index) ?? ''),
+    ).join('\n');
+    expect(duringSecondSegment).not.toContain('It cut deploy time');
+
+    await userEvent.click(screen.getByRole('button', { name: /stop answering/i }));
+    act(() => transcription.handlers()?.onCommitted('It cut deploy time in half.'));
     await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
 
     expect(resume).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
-      answer: 'I led the migration. It cut deploy time in half.',
+      answer: 'I personally led the migration. It cut deploy time in half.',
     });
   });
 

@@ -6,7 +6,7 @@ question to your previous answers. After the interview, it grades your answers a
 coaching report grounded in answer-craft guidance.
 
 ElevenLabs can speak browser interview questions and the closing. You can type an answer or dictate
-one recording segment, review the realtime transcript, and deliver the edited text. Voice is
+it in multiple segments, editing the transcript between segments before delivery. Voice is
 optional. A voice failure leaves the typed interview available.
 
 The browser and CLI drive the same durable Mastra workflow. LibSQL stores workflow snapshots and
@@ -75,9 +75,9 @@ Open http://localhost:5173 and run an interview:
    typed reveal.
 4. Type an answer, or click **Start answering** and grant microphone access. Dictation begins only
    after that click. Live Scribe text is read-only while the microphone is active. Click **Stop
-   answering**, review and edit the final text, then click **Deliver**. Each answer supports one
-   dictated segment, capped at five minutes. Typing remains available when dictation is not used or
-   fails.
+   answering** to review and edit the text. Click **Continue answering** to dictate another segment,
+   or click **Deliver** to send the answer. The five-minute limit covers all segments in one answer.
+   Typing remains available when dictation is not used or fails.
 5. When the interviewer has enough signal, it speaks the complete closing with the same timed text.
    The report waits for playback to finish, then opens with the full transcript and advice for each
    answer. In text mode, the closing keeps its typed reveal.
@@ -95,8 +95,10 @@ settings in the response.
 
 The answer card appears after question playback. **Start answering** requests a fresh Scribe token
 and microphone access. The transcript stays read-only during active dictation, including connection
-and finalization. **Stop answering** finalizes the segment and makes the transcript editable. The
-recording stops automatically after five minutes. Each answer supports one dictated segment.
+and finalization. **Stop answering** finalizes the segment and makes the transcript editable.
+**Continue answering** starts another segment without changing the reviewed text. Each segment uses
+a fresh token and realtime connection. The elapsed time carries across segments, and the active
+segment stops automatically when the answer reaches five recorded minutes.
 
 Microphone audio travels from the browser directly to ElevenLabs. The local server receives the
 token request but never receives the audio. The app keeps the token and undelivered transcript in
@@ -106,8 +108,9 @@ under the retention terms of your account.
 
 Speech errors reveal the full interviewer line and keep the interview moving. Dictation failures
 leave typed answers available, whether permission is denied, the token request fails, the browser
-lacks a required API, or the realtime session cannot finish. **Try again** starts a new attempt only
-when you click it.
+lacks a required API, or the realtime session cannot finish. If a later segment fails, the text you
+reviewed before starting it remains editable and ready to deliver. **Try again** starts a new attempt
+only when you click it.
 
 If voice is unavailable:
 

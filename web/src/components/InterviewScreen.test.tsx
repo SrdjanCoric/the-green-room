@@ -88,7 +88,7 @@ describe('InterviewScreen', () => {
     expect(onSubmitAnswer).toHaveBeenCalledWith('I led a migration.');
   });
 
-  it('offers one dictated segment after playback, then delivers only the reviewed transcript', async () => {
+  it('lets the candidate edit, continue dictating, and deliver the combined reviewed answer', async () => {
     let finishPlayback: (() => void) | undefined;
     const speech = new QuestionSpeechController({
       speak: vi.fn(
@@ -136,13 +136,25 @@ describe('InterviewScreen', () => {
     expect(transcription.session.commit).toHaveBeenCalledOnce();
     act(() => transcription.handlers()?.onCommitted('I led the migration.'));
     expect(answer).not.toHaveAttribute('readonly');
-    await userEvent.type(answer, ' It cut deploy time in half.');
+    await userEvent.clear(answer);
+    await userEvent.type(answer, 'I personally led the migration.');
+
+    await userEvent.click(screen.getByRole('button', { name: /continue answering/i }));
+    expect(transcription.getToken).toHaveBeenCalledTimes(2);
+    act(() => transcription.handlers()?.onSessionStarted());
+    act(() => transcription.handlers()?.onPartial('It cut deploy time'));
+    expect(answer).toHaveValue('I personally led the migration. It cut deploy time');
+    expect(answer).toHaveAttribute('readonly');
+
+    await userEvent.click(screen.getByRole('button', { name: /stop answering/i }));
+    act(() => transcription.handlers()?.onCommitted('It cut deploy time in half.'));
+    expect(answer).not.toHaveAttribute('readonly');
     await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
 
     expect(onSubmitAnswer).toHaveBeenCalledExactlyOnceWith(
-      'I led the migration. It cut deploy time in half.',
+      'I personally led the migration. It cut deploy time in half.',
     );
-    expect(transcription.session.close).toHaveBeenCalledOnce();
+    expect(transcription.session.close).toHaveBeenCalledTimes(2);
   });
 
   it('keeps typing available after microphone or realtime failure and retries only when asked', async () => {
@@ -172,6 +184,51 @@ describe('InterviewScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
     expect(onSubmitAnswer).toHaveBeenCalledExactlyOnceWith('Typed fallback.');
     expect(transcription.getToken).toHaveBeenCalledOnce();
+  });
+
+  it('resets dictated segments and elapsed state when the next interview turn arrives', async () => {
+    const transcription = transcriptionDouble();
+    const props = {
+      transcriptionEnabled: true,
+      answerTranscription: transcription.controller,
+      onSubmitAnswer: vi.fn(),
+      onSubmitLevel: vi.fn(),
+    };
+    const { rerender } = render(
+      <InterviewScreen
+        {...props}
+        state={stateWith({
+          phase: 'awaitingAnswer',
+          runId: 'run-1',
+          currentQuestion: 'Question one?',
+          currentQuestionNumber: 1,
+        })}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /start answering/i }));
+    act(() => transcription.handlers()?.onSessionStarted());
+    await userEvent.click(screen.getByRole('button', { name: /stop answering/i }));
+    act(() => transcription.handlers()?.onCommitted('Answer one.'));
+
+    rerender(
+      <InterviewScreen
+        {...props}
+        state={stateWith({
+          phase: 'awaitingAnswer',
+          runId: 'run-1',
+          currentQuestion: 'Question two?',
+          currentQuestionNumber: 2,
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText(/your answer/i)).toHaveValue('');
+    expect(screen.getByRole('button', { name: /start answering/i })).toBeEnabled();
+    expect(transcription.controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      elapsedSeconds: 0,
+      text: '',
+    });
   });
 
   it('closes active dictation when the answer card unmounts', async () => {

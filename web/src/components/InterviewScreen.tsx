@@ -221,7 +221,7 @@ export function InterviewScreen({
 
       {answerAvailable && (
         <CueCard
-          key="answer"
+          key={`answer:${state.runId ?? 'pending'}:${state.currentQuestionNumber ?? 'unknown'}`}
           label="Your answer"
           placeholder="Deliver your line. The specifics, in your own voice."
           tip="Play it like the real thing. Detail beats polish."
@@ -447,11 +447,13 @@ function CueCard({
   const [dictation, setDictation] = useState(() => transcription?.getSnapshot());
   useEffect(() => {
     if (!transcription) return;
-    const unsubscribe = transcription.subscribe(() => {
+    const syncSnapshot = () => {
       const next = transcription.getSnapshot();
       setDictation(next);
       if (next.phase !== 'ready') setValue(next.text);
-    });
+    };
+    const unsubscribe = transcription.subscribe(syncSnapshot);
+    syncSnapshot();
     return () => {
       unsubscribe();
       transcription.abort();
@@ -495,14 +497,20 @@ function CueCard({
       {transcriptionEnabled && transcription && (
         <div className="dictation">
           <div className="dictation-controls">
-            {(dictation?.phase === 'ready' || dictation?.phase === 'failed') && (
+            {(dictation?.phase === 'ready' ||
+              ((dictation?.phase === 'stopped' || dictation?.phase === 'failed') &&
+                dictation.canContinue)) && (
               <button
                 className="dictate"
                 type="button"
                 disabled={sent}
                 onClick={() => void transcription.start(value)}
               >
-                {dictation.phase === 'failed' ? 'Try again' : 'Start answering'}
+                {dictation.phase === 'failed'
+                  ? 'Try again'
+                  : dictation.phase === 'stopped'
+                    ? 'Continue answering'
+                    : 'Start answering'}
               </button>
             )}
             {dictation?.phase === 'listening' && (
@@ -513,7 +521,7 @@ function CueCard({
             {dictation && dictation.phase !== 'ready' && (
               <span className="dictation-status" aria-live="polite">
                 {dictation.status}
-                {dictation.phase === 'listening' && ` ${formatElapsed(dictation.elapsedSeconds)}`}
+                {` ${formatElapsed(dictation.elapsedSeconds)}`}
               </span>
             )}
           </div>
