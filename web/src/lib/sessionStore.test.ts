@@ -21,6 +21,7 @@ function liveState(): InterviewState {
     currentQuestionNumber: 2,
     lastAnsweredQuestionNumber: 1,
     suppressQuestionSpeech: false,
+    suppressClosingSpeech: false,
     levelPrompt: null,
     cue: null,
     closingMessage: '',

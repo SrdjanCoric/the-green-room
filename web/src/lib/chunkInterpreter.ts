@@ -24,6 +24,8 @@ interface StepCue {
   match: RegExp;
   label: string;
   section: ActiveSection;
+  /** This step can only run after closing, so its start settles the complete goodbye. */
+  settlesClosing?: boolean;
 }
 
 // Ordered most-specific first; the first match wins. Labels mirror the approved
@@ -37,8 +39,18 @@ const STEP_CUES: StepCue[] = [
   { match: /interview|question|turn/i, label: 'Loading the next question…', section: 'question' },
   { match: /assess/i, label: 'Weighing your answer…', section: null },
   { match: /closing/i, label: 'Wrapping up…', section: 'closing' },
-  { match: /grade/i, label: 'Grading your answers…', section: 'report' },
-  { match: /coach|report/i, label: 'Writing the coaching report…', section: 'report' },
+  {
+    match: /grade/i,
+    label: 'Grading your answers…',
+    section: 'report',
+    settlesClosing: true,
+  },
+  {
+    match: /coach|report/i,
+    label: 'Writing the coaching report…',
+    section: 'report',
+    settlesClosing: true,
+  },
 ];
 
 /** The cue shown for each stage the ingest step reports through its progress chunks. */
@@ -76,7 +88,9 @@ export function createChunkInterpreter(): ChunkInterpreter {
         const cue = STEP_CUES.find((c) => c.match.test(stepId));
         if (!cue) return null;
         section = cue.section;
-        return { type: 'cue', label: cue.label };
+        return cue.settlesClosing
+          ? { type: 'closing-settled', cue: cue.label }
+          : { type: 'cue', label: cue.label };
       }
 
       // A new reply opens: whatever streamed before it was a failed attempt's text.

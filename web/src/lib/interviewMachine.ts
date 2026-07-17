@@ -40,6 +40,8 @@ export interface InterviewState {
   lastAnsweredQuestionNumber: number;
   /** A rejoined current question is shown in full and never replayed; the next turn clears this. */
   suppressQuestionSpeech: boolean;
+  /** A rejoined closing is revealed in full and never recreated or rebilled. */
+  suppressClosingSpeech: boolean;
   /** The prompt shown when the run suspends for a target level. */
   levelPrompt: string | null;
   /** A between-turns status line ("Choosing the next question…"). */
@@ -47,9 +49,9 @@ export interface InterviewState {
   /** The interviewer's streamed goodbye, shown as their final line before grading. */
   closingMessage: string;
   /**
-   * Whether the goodbye has fully typed out on screen. The screen reports it (the
-   * reveal is UI pacing); holding it here lets the grading gate and the report
-   * navigation survive a remount instead of retyping and re-hiding.
+   * Whether the goodbye's active typed or spoken delivery has finished. Holding the
+   * gate here lets grading and report navigation survive a remount without replaying
+   * or re-hiding the closing.
    */
   closingRevealed: boolean;
   /** Raw coach tokens streamed while the report is written, shown before it settles. */
@@ -67,6 +69,7 @@ export const initialInterviewState: InterviewState = {
   currentQuestionNumber: 0,
   lastAnsweredQuestionNumber: 0,
   suppressQuestionSpeech: false,
+  suppressClosingSpeech: false,
   levelPrompt: null,
   cue: null,
   closingMessage: '',
@@ -83,7 +86,7 @@ export type InterviewAction =
   | { type: 'EVENT'; event: InterviewEvent }
   | { type: 'SUBMIT_ANSWER'; answer: string }
   | { type: 'SUBMIT_LEVEL' }
-  /** The screen finished typing the goodbye out; grading may take the stage. */
+  /** The screen finished delivering the goodbye; grading may take the stage. */
   | { type: 'CLOSING_REVEALED' }
   | { type: 'RETRY' }
   | { type: 'RESET' };
@@ -112,6 +115,7 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
         ...action.snapshot,
         runId: action.runId,
         suppressQuestionSpeech: true,
+        suppressClosingSpeech: true,
       };
       if (snapshot.phase === 'error') {
         return { ...snapshot, phase: 'starting', error: null, cue: 'Reconnecting…' };
@@ -198,6 +202,9 @@ function applyEvent(state: InterviewState, event: InterviewEvent): InterviewStat
         cue: null,
       };
 
+    case 'closing-settled':
+      return { ...state, phase: 'grading', cue: event.cue };
+
     case 'report-start':
       return { ...state, reportPreview: '' };
 
@@ -238,7 +245,13 @@ function applyEvent(state: InterviewState, event: InterviewEvent): InterviewStat
       };
 
     case 'completed':
-      return { ...state, phase: 'report', report: event.report, cue: null };
+      return {
+        ...state,
+        phase: 'report',
+        report: event.report,
+        closingMessage: event.closingMessage ?? state.closingMessage,
+        cue: null,
+      };
 
     case 'failed':
       return { ...state, phase: 'error', error: event.message, cue: null };

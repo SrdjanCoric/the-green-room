@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,7 +7,7 @@ import type { PrepareInterviewResponse } from './lib/api';
 import { initialInterviewState } from './lib/interviewMachine';
 import { QuestionSpeechController } from './lib/questionSpeechController';
 import { loadSession, saveSession } from './lib/sessionStore';
-import type { SpeechPlayer } from './lib/speechPlayer';
+import type { SpeakQuestionOptions, SpeechPlayer } from './lib/speechPlayer';
 import type { InterviewClient, InterviewEvent, InterviewReport } from './lib/types';
 
 const report: InterviewReport = {
@@ -230,6 +230,106 @@ describe('App — full interview flow', () => {
     expect(await screen.findByText(/strong, concrete material/i)).toBeInTheDocument();
   });
 
+  it('starts the spoken closing when grading begins instead of waiting for the report', async () => {
+    let gradingStarted: (() => void) | undefined;
+    const atGrading = new Promise<void>((resolve) => {
+      gradingStarted = resolve;
+    });
+    let finishGrading: (() => void) | undefined;
+    const gradingGate = new Promise<void>((resolve) => {
+      finishGrading = resolve;
+    });
+    async function* slowGradeResume(): AsyncGenerator<InterviewEvent> {
+      yield { type: 'closing-start' };
+      yield { type: 'closing-delta', text: 'Thanks for walking me through that today.' };
+      yield { type: 'closing-settled', cue: 'Grading your answers…' };
+      gradingStarted?.();
+      await gradingGate;
+      yield { type: 'completed', report };
+    }
+    const speak = vi.fn(async () => undefined);
+    const client: InterviewClient = {
+      start: (input) => ({ runId: input.threadId, events: startEvents() }),
+      resume: () => slowGradeResume(),
+      observe: () => noEvents(),
+    };
+    render(
+      <App
+        client={client}
+        prepare={vi.fn(async () => prepared)}
+        detectVoice={vi.fn(async () => true)}
+        questionSpeech={new QuestionSpeechController({ speak })}
+        storage={window.localStorage}
+      />,
+    );
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+    await userEvent.type(await screen.findByLabelText(/your answer/i), 'I led a migration.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+
+    await act(async () => atGrading);
+    try {
+      expect(speak).toHaveBeenCalledTimes(2);
+      expect(speak).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: 'Thanks for walking me through that today.' }),
+      );
+    } finally {
+      await act(async () => finishGrading?.());
+    }
+  });
+
+  it('keeps report navigation behind spoken closing playback', async () => {
+    let finishClosing: (() => void) | undefined;
+    const speak = vi.fn(({ text }: SpeakQuestionOptions) => {
+      if (!text.startsWith('Thanks')) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        finishClosing = resolve;
+      });
+    });
+    const client: InterviewClient = {
+      start: (input) => ({ runId: input.threadId, events: startEvents() }),
+      resume: () => closingResume(),
+      observe: () => noEvents(),
+    };
+    render(
+      <App
+        client={client}
+        prepare={vi.fn(async () => prepared)}
+        detectVoice={vi.fn(async () => true)}
+        questionSpeech={new QuestionSpeechController({ speak })}
+        storage={window.localStorage}
+      />,
+    );
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+    await userEvent.type(await screen.findByLabelText(/your answer/i), 'I led a migration.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/strong, concrete material/i)).not.toBeInTheDocument();
+    expect(window.location.hash).toMatch(/^#\/interview\//);
+
+    await act(async () => finishClosing?.());
+    expect(await screen.findByText(/strong, concrete material/i)).toBeInTheDocument();
+    expect(window.location.hash).toMatch(/^#\/report\//);
+    expect(speak).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: 'Proudest work?' }),
+    );
+    expect(speak).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: 'Thanks for walking me through the migration today.',
+      }),
+    );
+  });
+
   it('surfaces a failed turn with a retry that resumes the run with { retry: true }', async () => {
     async function* failingResume(): AsyncGenerator<InterviewEvent> {
       yield { type: 'suspended', suspend: { kind: 'failure', reason: 'The assessor call failed.' } };
@@ -379,6 +479,46 @@ describe('App — durable reconnect', () => {
     expect(await screen.findByText('What did the migration teach you?')).toBeInTheDocument();
     expect(observe).toHaveBeenCalledExactlyOnceWith('run-live');
     expect(window.location.hash).toBe('#/interview/run-live');
+  });
+
+  it('reconnects an interrupted closing from the authoritative result without replaying speech', async () => {
+    window.localStorage.setItem(
+      'green-room:history',
+      JSON.stringify([
+        { runId: 'run-closing', startedAt: '2026-07-08T09:00:00Z', status: 'live' },
+      ]),
+    );
+    saveSession(window.localStorage, 'run-closing', {
+      ...initialInterviewState,
+      phase: 'closing',
+      runId: 'run-closing',
+      closingMessage: 'Thanks for walk',
+    });
+    window.location.hash = '#/interview/run-closing';
+    const speak = vi.fn(async () => undefined);
+    const observe = vi.fn(() =>
+      (async function* (): AsyncGenerator<InterviewEvent> {
+        yield {
+          type: 'completed',
+          report,
+          closingMessage: 'Thanks for walking me through the migration today.',
+        };
+      })(),
+    );
+
+    render(
+      <App
+        client={{ ...mockClient(), observe }}
+        prepare={vi.fn(async () => prepared)}
+        detectVoice={vi.fn(async () => true)}
+        questionSpeech={new QuestionSpeechController({ speak })}
+        storage={window.localStorage}
+      />,
+    );
+
+    expect(await screen.findByText(/strong, concrete material/i)).toBeInTheDocument();
+    expect(speak).not.toHaveBeenCalled();
+    expect(observe).toHaveBeenCalledExactlyOnceWith('run-closing');
   });
 
   it('persists the interview session as the run streams, so a reload has a snapshot', async () => {

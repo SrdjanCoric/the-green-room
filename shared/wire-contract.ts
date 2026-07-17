@@ -188,6 +188,7 @@ export type SuspendPayload = z.infer<typeof interviewSuspendWireSchema>;
 export const interviewReportResultSchema = z.object({
   coaching: coachReportSchema,
   transcript: z.array(transcriptEntrySchema).default([]),
+  closingMessage: z.string().optional(),
   roleContext: roleContextSchema.optional(),
   targetLevel: z.string().optional(),
   reportPath: z.string().optional(),

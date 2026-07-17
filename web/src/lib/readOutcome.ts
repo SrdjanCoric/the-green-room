@@ -37,10 +37,8 @@ export function readOutcome(outcome: WorkflowOutcome | undefined): InterviewEven
       const suspend = readSuspend(outcome);
       return suspend ? { type: 'suspended', suspend } : null;
     }
-    case 'success': {
-      const report = readReport(outcome.result);
-      return report ? { type: 'completed', report } : null;
-    }
+    case 'success':
+      return readCompleted(outcome.result);
     case 'failed':
     case 'tripwire':
       return { type: 'failed', message: readErrorMessage(outcome.error) };
@@ -88,7 +86,9 @@ function findSuspendedStepPayload(
   return undefined;
 }
 
-function readReport(result: unknown): InterviewReport | null {
+function readCompleted(
+  result: unknown,
+): Extract<InterviewEvent, { type: 'completed' }> | null {
   const parsed = interviewReportResultSchema.safeParse(result);
   if (!parsed.success) return null;
   const data = parsed.data;
@@ -103,7 +103,9 @@ function readReport(result: unknown): InterviewReport | null {
     if (data.roleContext.role) report.role = data.roleContext.role;
     if (data.roleContext.company) report.company = data.roleContext.company;
   }
-  return report;
+  return data.closingMessage === undefined
+    ? { type: 'completed', report }
+    : { type: 'completed', report, closingMessage: data.closingMessage };
 }
 
 function readErrorMessage(error: unknown): string {

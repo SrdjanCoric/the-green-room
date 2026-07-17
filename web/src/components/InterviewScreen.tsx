@@ -10,7 +10,7 @@ export interface InterviewScreenProps {
   state: InterviewState;
   onSubmitAnswer: (answer: string) => void;
   onSubmitLevel: (level: string) => void;
-  /** Reports that the goodbye finished typing out (drives `state.closingRevealed`). */
+  /** Reports that the goodbye's active delivery finished (drives the closing gate). */
   onClosingRevealed?: () => void;
   /** Whether this run should deliver authoritative questions with timed speech. */
   voiceEnabled?: boolean;
@@ -41,83 +41,56 @@ export function InterviewScreen({
     voiceEnabled && awaitingAnswer && state.runId && state.currentQuestion
       ? `${state.runId}:${state.currentQuestionNumber}:${state.currentQuestion}`
       : null;
-  const [voiceDelivery, setVoiceDelivery] = useState<{
-    id: string | null;
-    visibleText: string;
-    settled: boolean;
-  }>({ id: null, visibleText: '', settled: false });
-
   const speechEligible =
     Boolean(voiceQuestionId) && !state.suppressQuestionSpeech && Boolean(questionSpeech);
-  useEffect(() => {
-    if (!voiceQuestionId || !speechEligible || !questionSpeech) return;
-    let current = true;
-    void questionSpeech
-      .speak({
-        id: voiceQuestionId,
-        text: state.currentQuestion,
-        onPlaybackStart: () => {
-          if (current && reducedMotion) {
-            setVoiceDelivery({
-              id: voiceQuestionId,
-              visibleText: state.currentQuestion,
-              settled: false,
-            });
-          }
-        },
-        onProgress: (prefix) => {
-          if (current && !reducedMotion) {
-            setVoiceDelivery({ id: voiceQuestionId, visibleText: prefix, settled: false });
-          }
-        },
-      })
-      .then(
-        () => {
-          if (current) {
-            setVoiceDelivery({
-              id: voiceQuestionId,
-              visibleText: state.currentQuestion,
-              settled: true,
-            });
-          }
-        },
-        () => {
-          if (current) {
-            setVoiceDelivery({
-              id: voiceQuestionId,
-              visibleText: state.currentQuestion,
-              settled: true,
-            });
-          }
-        },
-      );
-    return () => {
-      current = false;
-      questionSpeech.release(voiceQuestionId);
-    };
-  }, [
-    questionSpeech,
+  const voiceDelivery = useTimedSpeechDelivery({
+    id: speechEligible ? voiceQuestionId : null,
+    text: state.currentQuestion,
+    controller: questionSpeech,
     reducedMotion,
-    speechEligible,
-    state.currentQuestion,
-    voiceQuestionId,
-  ]);
-
-  const currentVoiceDelivery =
-    voiceDelivery.id === voiceQuestionId
-      ? voiceDelivery
-      : { id: voiceQuestionId, visibleText: '', settled: false };
+  });
   const voiceSettled =
-    voiceEnabled &&
-    awaitingAnswer &&
-    (!speechEligible || currentVoiceDelivery.settled);
+    voiceEnabled && awaitingAnswer && (!speechEligible || voiceDelivery.settled);
   const visibleVoiceQuestion =
-    voiceSettled && !speechEligible ? state.currentQuestion : currentVoiceDelivery.visibleText;
+    voiceSettled && !speechEligible ? state.currentQuestion : voiceDelivery.visibleText;
   const answerAvailable = awaitingAnswer && (!voiceEnabled || voiceSettled);
 
-  // Grading holds off stage until the goodbye has typed out. The reveal fact lives in
-  // the machine (`closingRevealed`), reported from the typewriter's ticks below, so a
-  // remount mid-grading neither retypes the goodbye nor re-hides the grading.
+  // The first post-closing phase is the authoritative boundary: the closing step has
+  // finished writing, even if grading/report deltas are already arriving behind it.
+  const closingSettled =
+    Boolean(state.closingMessage) && (state.phase === 'grading' || state.phase === 'report');
+  const closingSpeechId =
+    voiceEnabled && closingSettled && state.runId && !state.closingRevealed
+      ? `${state.runId}:closing`
+      : null;
+  const closingSpeechEligible =
+    Boolean(closingSpeechId) && !state.suppressClosingSpeech && Boolean(questionSpeech);
+  const closingDelivery = useTimedSpeechDelivery({
+    id: closingSpeechEligible ? closingSpeechId : null,
+    text: state.closingMessage,
+    controller: questionSpeech,
+    reducedMotion,
+    onSettled: onClosingRevealed,
+  });
+  const onClosingRevealedRef = useRef(onClosingRevealed);
+  useEffect(() => {
+    onClosingRevealedRef.current = onClosingRevealed;
+  }, [onClosingRevealed]);
+  useEffect(() => {
+    if (closingSpeechId && !state.closingRevealed && !closingSpeechEligible) {
+      onClosingRevealedRef.current?.();
+    }
+  }, [closingSpeechEligible, closingSpeechId, state.closingRevealed]);
+
+  const visibleVoiceClosing =
+    closingSettled && !closingSpeechEligible
+      ? state.closingMessage
+      : closingDelivery.visibleText;
+  const closingVisuallySettled =
+    state.closingRevealed || (closingSettled && !closingSpeechEligible);
+
+  // Grading holds off stage until the goodbye has finished its active delivery mode.
+  // The fact lives in the machine so remounting cannot re-hide a delivered closing.
   const closingRevealed = state.closingMessage.length === 0 || state.closingRevealed;
 
   // Follow the scene down the page: typed reveals and the streamed report preview
@@ -145,7 +118,11 @@ export function InterviewScreen({
         question the moment it lands (on `awaitingAnswer`), and nothing before.
       */}
       <div className="sr-only" role="status">
-        {answerAvailable ? state.currentQuestion : ''}
+        {answerAvailable
+          ? state.currentQuestion
+          : state.closingRevealed
+            ? state.closingMessage
+            : ''}
       </div>
 
       <div className="scene-meta">{sceneMeta(state)}</div>
@@ -193,12 +170,21 @@ export function InterviewScreen({
           <div className="line q" aria-hidden="true">
             <div className="char">The Interviewer</div>
             <div className="say">
-              <TypewrittenLine
-                text={state.closingMessage}
-                // A remount after the goodbye already landed shows it whole, no retype.
-                initialCount={state.closingRevealed ? state.closingMessage.length : 0}
-                onShown={onClosingShown}
-              />
+              {voiceEnabled ? (
+                <>
+                  {state.closingRevealed ? state.closingMessage : visibleVoiceClosing}
+                  {!closingVisuallySettled && !closingDelivery.settled && (
+                    <span className="caret" />
+                  )}
+                </>
+              ) : (
+                <TypewrittenLine
+                  text={state.closingMessage}
+                  // A remount after the goodbye already landed shows it whole, no retype.
+                  initialCount={state.closingRevealed ? state.closingMessage.length : 0}
+                  onShown={onClosingShown}
+                />
+              )}
             </div>
           </div>
         )}
@@ -238,6 +224,69 @@ export function InterviewScreen({
       {awaitingLevel && <LevelPicker onPick={onSubmitLevel} />}
     </>
   );
+}
+
+interface TimedSpeechDelivery {
+  id: string | null;
+  visibleText: string;
+  settled: boolean;
+}
+
+/** Share alignment-driven browser delivery between questions and the closing. */
+function useTimedSpeechDelivery({
+  id,
+  text,
+  controller,
+  reducedMotion,
+  onSettled,
+}: {
+  id: string | null;
+  text: string;
+  controller?: QuestionSpeechController;
+  reducedMotion: boolean;
+  onSettled?: () => void;
+}): TimedSpeechDelivery {
+  const [delivery, setDelivery] = useState<TimedSpeechDelivery>({
+    id: null,
+    visibleText: '',
+    settled: false,
+  });
+  const onSettledRef = useRef(onSettled);
+  useEffect(() => {
+    onSettledRef.current = onSettled;
+  }, [onSettled]);
+
+  useEffect(() => {
+    if (!id || !controller) return;
+    let current = true;
+    const settle = () => {
+      if (!current) return;
+      setDelivery({ id, visibleText: text, settled: true });
+      onSettledRef.current?.();
+    };
+    void controller
+      .speak({
+        id,
+        text,
+        onPlaybackStart: () => {
+          if (current && reducedMotion) {
+            setDelivery({ id, visibleText: text, settled: false });
+          }
+        },
+        onProgress: (prefix) => {
+          if (current && !reducedMotion) {
+            setDelivery({ id, visibleText: prefix, settled: false });
+          }
+        },
+      })
+      .then(settle, settle);
+    return () => {
+      current = false;
+      controller.release(id);
+    };
+  }, [controller, id, reducedMotion, text]);
+
+  return delivery.id === id ? delivery : { id, visibleText: '', settled: false };
 }
 
 function sceneMeta(state: InterviewState): string {

@@ -42,7 +42,7 @@ export interface UseInterview {
   submitAnswer: (answer: string) => void;
   /** Choose the target level when the run suspended to ask for it. */
   submitLevel: (level: string) => void;
-  /** Report that the goodbye finished typing out on screen. */
+  /** Report that the goodbye's active delivery finished. */
   markClosingRevealed: () => void;
   /** Re-run a failed turn when the run suspended with a failure payload. */
   retry: () => void;

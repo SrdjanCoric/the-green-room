@@ -16,7 +16,7 @@ answer-craft guidance (see [Coaching knowledge](#coaching-knowledge)).
 - Node.js ≥ 22.13
 - An Anthropic API key (interview, grading, coaching)
 - An OpenAI API key (embeddings for the coach's retrieval; the interview itself runs without it)
-- Optional: an ElevenLabs API key for spoken questions in the browser
+- Optional: an ElevenLabs API key for spoken questions and closings in the browser
 
 ## Setup
 
@@ -26,8 +26,8 @@ cd web && npm install && cd ..
 cp .env.example .env   # then set ANTHROPIC_API_KEY (and OPENAI_API_KEY for coached advice)
 ```
 
-Set `ELEVENLABS_API_KEY` to speak browser interview questions. The API key alone uses the built-in
-Bella English voice and Eleven Flash v2.5. `ELEVENLABS_VOICE_ID` and
+Set `ELEVENLABS_API_KEY` to speak browser interview questions and the closing. The API key alone
+uses the built-in Bella English voice and Eleven Flash v2.5. `ELEVENLABS_VOICE_ID` and
 `ELEVENLABS_TTS_MODEL` can override those server-side defaults.
 
 ## Running an interview in the browser
@@ -53,18 +53,19 @@ Open http://localhost:5173 and run an interview:
    character timing. The answer card appears after playback. Without voice, questions use the
    typed reveal.
 4. Answer each question in the cue card and deliver it. When the interviewer has enough signal,
-   the session ends and the coaching report streams in, with the full transcript and advice for
-   each answer.
+   it speaks the complete closing with the same timed text. The report waits for playback to finish,
+   then opens with the full transcript and advice for each answer. In text mode, the closing keeps
+   its typed reveal.
 
 The sidebar lists your past runs, and opening a finished one shows its report. The Vite server
 proxies `/api`, `/prepare-interview`, and `/voice` to `http://localhost:4111`, so the browser stays
 same-origin and needs no CORS setup. Point the proxy at another host with `MASTRA_SERVER_URL`.
 
-Voice is limited to browser interview questions. The target-level prompt, closing, report, and CLI
-stay silent. The browser checks `GET /voice/capabilities` when an interview starts. The response
-contains only a capability boolean; the API key and voice settings stay on the Mastra server.
-Speech or playback errors, including audio decoding failures, show the complete question and
-enable the typed answer. The next question tries voice again.
+Voice is limited to the browser interviewer's questions and closing. The target-level prompt,
+progress cues, report, and CLI stay silent. The browser checks `GET /voice/capabilities` when an
+interview starts. The response contains only a capability boolean; the API key and voice settings
+stay on the Mastra server. Speech or playback errors, including audio decoding failures, show the
+complete line and release the answer or report gate. A later question can try voice again.
 
 If questions stay in text mode, restart the Mastra server after setting `ELEVENLABS_API_KEY`, then
 open `http://localhost:5173/voice/capabilities`. A configured server returns `{"speech":true}`.
@@ -107,8 +108,9 @@ If you reload the page (or your connection drops) while a question or the final 
 streaming, the browser rejoins the same run where it left off: the server keeps a replay cache
 of every streamed chunk by run id, and the client picks up from the last chunk it received. Your
 answered questions are restored from a local session snapshot, and the in-flight text finishes
-streaming instead of restarting. An interview that's still open in the sidebar shows as
-**● now playing**; clicking it reconnects to that run. If the API server restarted in between,
+streaming instead of restarting. An interrupted spoken closing isn't replayed; the browser shows
+its complete text and opens the finished report. An interview that's still open in the sidebar
+shows as **● now playing**; clicking it reconnects to that run. If the API server restarted in between,
 there's no live stream to rejoin; the interview instead picks up from its last saved turn.
 
 From the terminal:

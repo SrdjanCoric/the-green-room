@@ -10,6 +10,7 @@ export interface QuestionSpeechRequest {
 interface ActiveSpeech {
   id: string;
   abort: AbortController;
+  request: QuestionSpeechRequest;
   promise: Promise<void>;
 }
 
@@ -29,24 +30,35 @@ export class QuestionSpeechController {
 
   speak(request: QuestionSpeechRequest): Promise<void> {
     if (this.#pendingRelease?.id === request.id) this.#pendingRelease = null;
-    if (this.#active?.id === request.id) return this.#active.promise;
+    if (this.#active?.id === request.id) {
+      // StrictMode remounts the effect while the same player promise is active. Hand
+      // progress to the current effect rather than leaving callbacks on the released one.
+      this.#active.request = request;
+      return this.#active.promise;
+    }
     if (this.#active) this.#active.abort.abort(abortReason());
     if (this.#attempted.has(request.id)) return Promise.resolve();
 
     this.#attempted.add(request.id);
     const abort = new AbortController();
-    const promise = this.#player
+    const active: ActiveSpeech = {
+      id: request.id,
+      abort,
+      request,
+      promise: Promise.resolve(),
+    };
+    this.#active = active;
+    active.promise = this.#player
       .speak({
         text: request.text,
-        onProgress: request.onProgress,
-        onPlaybackStart: request.onPlaybackStart,
+        onProgress: (prefix) => active.request.onProgress(prefix),
+        onPlaybackStart: () => active.request.onPlaybackStart?.(),
         signal: abort.signal,
       })
       .finally(() => {
-        if (this.#active?.id === request.id) this.#active = null;
+        if (this.#active === active) this.#active = null;
       });
-    this.#active = { id: request.id, abort, promise };
-    return promise;
+    return active.promise;
   }
 
   /**

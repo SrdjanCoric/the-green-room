@@ -1,7 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { useState } from 'react';
+import { StrictMode, useState } from 'react';
 
 import { initialInterviewState, type InterviewState } from '../lib/interviewMachine';
 import { QuestionSpeechController } from '../lib/questionSpeechController';
@@ -345,19 +345,274 @@ describe('InterviewScreen', () => {
     expect(speak).not.toHaveBeenCalled();
   });
 
-  it('keeps the interviewer closing silent in voice mode', () => {
-    const speak = vi.fn(async () => undefined);
+  it('holds the report preview until the settled closing finishes spoken delivery', async () => {
+    let finishPlayback: (() => void) | undefined;
+    let progress: ((prefix: string) => void) | undefined;
+    const speak = vi.fn(
+      ({ onProgress }: SpeakQuestionOptions) =>
+        new Promise<void>((resolve) => {
+          progress = onProgress;
+          finishPlayback = resolve;
+        }),
+    );
+    const controller = new QuestionSpeechController({ speak });
+
+    function SpokenClosingHarness() {
+      const [state, setState] = useState(
+        stateWith({
+          phase: 'grading',
+          runId: 'run-1',
+          closingMessage: 'Thanks for walking me through the migration today.',
+          reportPreview: 'You perform like someone who has done the work',
+        }),
+      );
+      return (
+        <InterviewScreen
+          state={state}
+          voiceEnabled
+          questionSpeech={controller}
+          onSubmitAnswer={vi.fn()}
+          onSubmitLevel={vi.fn()}
+          onClosingRevealed={() =>
+            setState((current) => ({ ...current, closingRevealed: true }))
+          }
+        />
+      );
+    }
+
     render(
+      <StrictMode>
+        <SpokenClosingHarness />
+      </StrictMode>,
+    );
+
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledOnce());
+    expect(screen.queryByText(/you perform like someone/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('');
+    act(() => progress?.('Thanks for walking'));
+    expect(screen.getByText('Thanks for walking')).toBeInTheDocument();
+
+    await act(async () => finishPlayback?.());
+    expect(screen.getAllByText(/migration today/i)).toHaveLength(2);
+    expect(screen.getByText(/you perform like someone/i)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Thanks for walking me through the migration today.',
+    );
+  });
+
+  it('reveals the full closing and releases the report when spoken delivery fails', async () => {
+    const controller = new QuestionSpeechController({
+      speak: vi.fn(async () => Promise.reject(new Error('decode failed'))),
+    });
+
+    function FailedClosingHarness() {
+      const [state, setState] = useState(
+        stateWith({
+          phase: 'grading',
+          runId: 'run-1',
+          closingMessage: 'Thanks for walking me through that today.',
+          reportPreview: 'Your report is ready.',
+        }),
+      );
+      return (
+        <InterviewScreen
+          state={state}
+          voiceEnabled
+          questionSpeech={controller}
+          onSubmitAnswer={vi.fn()}
+          onSubmitLevel={vi.fn()}
+          onClosingRevealed={() =>
+            setState((current) => ({ ...current, closingRevealed: true }))
+          }
+        />
+      );
+    }
+
+    render(<FailedClosingHarness />);
+
+    expect(await screen.findByText(/your report is ready/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/thanks for walking me through that today/i)).toHaveLength(2);
+  });
+
+  it('shows the full spoken closing at playback start under reduced motion but keeps the gate', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes('reduce'),
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    let finishPlayback: (() => void) | undefined;
+    const speak = vi.fn(
+      ({ onPlaybackStart }: SpeakQuestionOptions) =>
+        new Promise<void>((resolve) => {
+          onPlaybackStart?.();
+          finishPlayback = resolve;
+        }),
+    );
+
+    function ReducedMotionClosingHarness() {
+      const [state, setState] = useState(
+        stateWith({
+          phase: 'grading',
+          runId: 'run-1',
+          closingMessage: 'Thanks for walking me through that today.',
+          reportPreview: 'Your report is ready.',
+        }),
+      );
+      return (
+        <InterviewScreen
+          state={state}
+          voiceEnabled
+          questionSpeech={new QuestionSpeechController({ speak })}
+          onSubmitAnswer={vi.fn()}
+          onSubmitLevel={vi.fn()}
+          onClosingRevealed={() =>
+            setState((current) => ({ ...current, closingRevealed: true }))
+          }
+        />
+      );
+    }
+
+    try {
+      render(<ReducedMotionClosingHarness />);
+      expect(await screen.findByText(/thanks for walking me through that today/i)).toBeInTheDocument();
+      expect(screen.queryByText(/your report is ready/i)).not.toBeInTheDocument();
+      await act(async () => finishPlayback?.());
+      expect(screen.getByText(/your report is ready/i)).toBeInTheDocument();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it('aborts spoken closing playback when the interview screen unmounts', async () => {
+    let signal: AbortSignal | undefined;
+    const speak = vi.fn(
+      ({ signal: activeSignal }: SpeakQuestionOptions) =>
+        new Promise<void>((_resolve, reject) => {
+          signal = activeSignal;
+          activeSignal.addEventListener(
+            'abort',
+            () => reject(new DOMException('cancelled', 'AbortError')),
+            { once: true },
+          );
+        }),
+    );
+    const { unmount } = render(
       <InterviewScreen
-        state={stateWith({ phase: 'closing', runId: 'run-1', closingMessage: 'Thanks for today.' })}
+        state={stateWith({
+          phase: 'grading',
+          runId: 'run-1',
+          closingMessage: 'Thanks for today.',
+        })}
         voiceEnabled
         questionSpeech={new QuestionSpeechController({ speak })}
         onSubmitAnswer={vi.fn()}
         onSubmitLevel={vi.fn()}
       />,
     );
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledOnce());
+
+    unmount();
+    await act(async () => Promise.resolve());
+
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('shows a reconnected closing whole and releases the report without replaying it', async () => {
+    const speak = vi.fn(async () => undefined);
+
+    function ReconnectedClosingHarness() {
+      const [state, setState] = useState(
+        stateWith({
+          phase: 'grading',
+          runId: 'run-1',
+          closingMessage: 'Thanks for walking me through that today.',
+          suppressClosingSpeech: true,
+          reportPreview: 'Your report is ready.',
+        }),
+      );
+      return (
+        <InterviewScreen
+          state={state}
+          voiceEnabled
+          questionSpeech={new QuestionSpeechController({ speak })}
+          onSubmitAnswer={vi.fn()}
+          onSubmitLevel={vi.fn()}
+          onClosingRevealed={() =>
+            setState((current) => ({ ...current, closingRevealed: true }))
+          }
+        />
+      );
+    }
+
+    render(<ReconnectedClosingHarness />);
+
+    expect(await screen.findByText(/your report is ready/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/thanks for walking me through that today/i)).toHaveLength(2);
+    expect(speak).not.toHaveBeenCalled();
+  });
+
+  it('waits for the closing boundary and ignores report deltas as replay triggers', async () => {
+    const speak = vi.fn(
+      ({ signal }: SpeakQuestionOptions) =>
+        new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => reject(new DOMException('cancelled', 'AbortError')),
+            { once: true },
+          );
+        }),
+    );
+    const controller = new QuestionSpeechController({ speak });
+    const props = {
+      voiceEnabled: true,
+      questionSpeech: controller,
+      onSubmitAnswer: vi.fn(),
+      onSubmitLevel: vi.fn(),
+    };
+    const { rerender } = render(
+      <InterviewScreen
+        {...props}
+        state={stateWith({
+          phase: 'closing',
+          runId: 'run-1',
+          closingMessage: 'Thanks for today.',
+        })}
+      />,
+    );
 
     expect(speak).not.toHaveBeenCalled();
+    rerender(
+      <InterviewScreen
+        {...props}
+        state={stateWith({
+          phase: 'grading',
+          runId: 'run-1',
+          closingMessage: 'Thanks for today.',
+          reportPreview: 'First report delta',
+        })}
+      />,
+    );
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledOnce());
+
+    rerender(
+      <InterviewScreen
+        {...props}
+        state={stateWith({
+          phase: 'grading',
+          runId: 'run-1',
+          closingMessage: 'Thanks for today.',
+          reportPreview: 'First report delta, then another',
+        })}
+      />,
+    );
+    expect(speak).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/first report delta/i)).not.toBeInTheDocument();
   });
 
   it('types the question out over time instead of stamping it', async () => {
@@ -439,7 +694,7 @@ describe('InterviewScreen', () => {
     );
 
     // All of it is on stage immediately — no typewriter delay, no hidden grading.
-    expect(screen.getByText(/migration work today/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/migration work today/i)).toHaveLength(2);
     expect(screen.getByText(/grading your answers/i)).toBeInTheDocument();
     expect(screen.getByText(/you perform like someone/i)).toBeInTheDocument();
   });

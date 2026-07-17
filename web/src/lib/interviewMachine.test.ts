@@ -135,6 +135,23 @@ describe('interviewReducer', () => {
     expect(state.closingRevealed).toBe(false);
   });
 
+  it('settles the complete goodbye when the grade step starts', () => {
+    let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
+    state = interviewReducer(state, {
+      type: 'EVENT',
+      event: { type: 'closing-delta', text: 'Thanks for today.' },
+    });
+
+    state = interviewReducer(state, {
+      type: 'EVENT',
+      event: { type: 'closing-settled', cue: 'Grading your answers…' },
+    });
+
+    expect(state.phase).toBe('grading');
+    expect(state.closingMessage).toBe('Thanks for today.');
+    expect(state.cue).toBe('Grading your answers…');
+  });
+
   it('keeps the goodbye on screen while grading streams the report', () => {
     let state = interviewReducer(initialInterviewState, { type: 'START', runId: 'r' });
     state = interviewReducer(state, { type: 'EVENT', event: { type: 'closing-delta', text: 'Thanks for today.' } });
@@ -171,6 +188,32 @@ describe('interviewReducer', () => {
     state = interviewReducer(state, { type: 'EVENT', event: { type: 'completed', report } });
     expect(state.phase).toBe('report');
     expect(state.report).toEqual(report);
+  });
+
+  it('settles a reconnected closing on the authoritative completed text without replaying it', () => {
+    let state = interviewReducer(initialInterviewState, {
+      type: 'RECONNECT',
+      runId: 'run-1',
+      snapshot: {
+        ...initialInterviewState,
+        phase: 'closing',
+        runId: 'run-1',
+        closingMessage: 'Thanks for walk',
+      },
+    });
+
+    state = interviewReducer(state, {
+      type: 'EVENT',
+      event: {
+        type: 'completed',
+        report,
+        closingMessage: 'Thanks for walking me through that today.',
+      },
+    });
+
+    expect(state.phase).toBe('report');
+    expect(state.closingMessage).toBe('Thanks for walking me through that today.');
+    expect(state.suppressClosingSpeech).toBe(true);
   });
 
   it('captures a failure', () => {
