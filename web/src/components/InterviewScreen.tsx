@@ -4,6 +4,7 @@ import { useFocusOnMount } from '../hooks/useFocusOnMount';
 import { usePrefersReducedMotion } from '../hooks/usePrefersReducedMotion';
 import { useStickToBottom } from '../hooks/useStickToBottom';
 import type { InterviewState } from '../lib/interviewMachine';
+import type { QuestionSpeechController } from '../lib/questionSpeechController';
 
 export interface InterviewScreenProps {
   state: InterviewState;
@@ -11,6 +12,10 @@ export interface InterviewScreenProps {
   onSubmitLevel: (level: string) => void;
   /** Reports that the goodbye finished typing out (drives `state.closingRevealed`). */
   onClosingRevealed?: () => void;
+  /** Whether this run should deliver authoritative questions with timed speech. */
+  voiceEnabled?: boolean;
+  /** Run-scoped controller that deduplicates and cancels browser utterances. */
+  questionSpeech?: QuestionSpeechController;
 }
 
 /**
@@ -23,12 +28,92 @@ export function InterviewScreen({
   onSubmitAnswer,
   onSubmitLevel,
   onClosingRevealed,
+  voiceEnabled = false,
+  questionSpeech,
 }: InterviewScreenProps) {
   const streaming = state.phase === 'streamingQuestion';
   const awaitingAnswer = state.phase === 'awaitingAnswer';
   const awaitingLevel = state.phase === 'awaitingLevel';
   const grading = state.phase === 'grading';
-  const showQuestion = streaming || awaitingAnswer;
+  const showTypedQuestion = !voiceEnabled && (streaming || awaitingAnswer);
+  const reducedMotion = usePrefersReducedMotion();
+  const voiceQuestionId =
+    voiceEnabled && awaitingAnswer && state.runId && state.currentQuestion
+      ? `${state.runId}:${state.currentQuestionNumber}:${state.currentQuestion}`
+      : null;
+  const [voiceDelivery, setVoiceDelivery] = useState<{
+    id: string | null;
+    visibleText: string;
+    settled: boolean;
+  }>({ id: null, visibleText: '', settled: false });
+
+  const speechEligible =
+    Boolean(voiceQuestionId) && !state.suppressQuestionSpeech && Boolean(questionSpeech);
+  useEffect(() => {
+    if (!voiceQuestionId || !speechEligible || !questionSpeech) return;
+    let current = true;
+    void questionSpeech
+      .speak({
+        id: voiceQuestionId,
+        text: state.currentQuestion,
+        onPlaybackStart: () => {
+          if (current && reducedMotion) {
+            setVoiceDelivery({
+              id: voiceQuestionId,
+              visibleText: state.currentQuestion,
+              settled: false,
+            });
+          }
+        },
+        onProgress: (prefix) => {
+          if (current && !reducedMotion) {
+            setVoiceDelivery({ id: voiceQuestionId, visibleText: prefix, settled: false });
+          }
+        },
+      })
+      .then(
+        () => {
+          if (current) {
+            setVoiceDelivery({
+              id: voiceQuestionId,
+              visibleText: state.currentQuestion,
+              settled: true,
+            });
+          }
+        },
+        () => {
+          if (current) {
+            setVoiceDelivery({
+              id: voiceQuestionId,
+              visibleText: state.currentQuestion,
+              settled: true,
+            });
+          }
+        },
+      );
+    return () => {
+      current = false;
+      questionSpeech.release(voiceQuestionId);
+    };
+  }, [
+    questionSpeech,
+    reducedMotion,
+    speechEligible,
+    state.currentQuestion,
+    voiceQuestionId,
+  ]);
+
+  const currentVoiceDelivery =
+    voiceDelivery.id === voiceQuestionId
+      ? voiceDelivery
+      : { id: voiceQuestionId, visibleText: '', settled: false };
+  const voiceSettled =
+    voiceEnabled &&
+    awaitingAnswer &&
+    (!speechEligible || currentVoiceDelivery.settled);
+  const visibleVoiceQuestion =
+    voiceSettled && !speechEligible ? state.currentQuestion : currentVoiceDelivery.visibleText;
+  const answerAvailable = awaitingAnswer && (!voiceEnabled || voiceSettled);
 
   // Grading holds off stage until the goodbye has typed out. The reveal fact lives in
   // the machine (`closingRevealed`), reported from the typewriter's ticks below, so a
@@ -60,7 +145,7 @@ export function InterviewScreen({
         question the moment it lands (on `awaitingAnswer`), and nothing before.
       */}
       <div className="sr-only" role="status">
-        {awaitingAnswer ? state.currentQuestion : ''}
+        {answerAvailable ? state.currentQuestion : ''}
       </div>
 
       <div className="scene-meta">{sceneMeta(state)}</div>
@@ -81,11 +166,21 @@ export function InterviewScreen({
           </div>
         ))}
 
-        {showQuestion && state.currentQuestion && (
+        {showTypedQuestion && state.currentQuestion && (
           <div className="line q" aria-hidden="true">
             <div className="char">The Interviewer</div>
             <div className="say">
               <TypewrittenLine text={state.currentQuestion} onShown={() => follow('instant')} />
+            </div>
+          </div>
+        )}
+
+        {voiceEnabled && awaitingAnswer && state.currentQuestion && (
+          <div className="line q" aria-hidden="true">
+            <div className="char">The Interviewer</div>
+            <div className="say">
+              {visibleVoiceQuestion}
+              {!voiceSettled && <span className="caret" />}
             </div>
           </div>
         )}
@@ -116,14 +211,21 @@ export function InterviewScreen({
         </p>
       )}
 
-      {state.cue && !awaitingAnswer && !awaitingLevel && closingRevealed && (
+      {voiceEnabled && streaming && (
+        <div className="cueing">
+          <span className="sp" />
+          Preparing the next question…
+        </div>
+      )}
+
+      {state.cue && !awaitingAnswer && !awaitingLevel && !streaming && closingRevealed && (
         <div className="cueing" role="status">
           <span className="sp" />
           {state.cue}
         </div>
       )}
 
-      {awaitingAnswer && (
+      {answerAvailable && (
         <CueCard
           key="answer"
           label="Your answer"

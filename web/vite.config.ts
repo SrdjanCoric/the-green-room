@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 // The Mastra dev server (mastra dev) serves the workflow API and our additive
-// /prepare-interview route on http://localhost:4111. Proxying both prefixes keeps
+// /prepare-interview and /voice routes on http://localhost:4111. Proxying these prefixes keeps
 // the browser same-origin with the Vite dev server, so no CORS config is needed on
 // the Mastra side. Override the target with MASTRA_SERVER_URL when the API runs
 // elsewhere.
@@ -15,6 +15,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: MASTRA_SERVER_URL, changeOrigin: true },
       '/prepare-interview': { target: MASTRA_SERVER_URL, changeOrigin: true },
+      '/voice': { target: MASTRA_SERVER_URL, changeOrigin: true },
     },
   },
   test: {

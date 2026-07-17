@@ -20,6 +20,7 @@ function liveState(): InterviewState {
     currentQuestion: 'What did you learn?',
     currentQuestionNumber: 2,
     lastAnsweredQuestionNumber: 1,
+    suppressQuestionSpeech: false,
     levelPrompt: null,
     cue: null,
     closingMessage: '',

@@ -14,6 +14,7 @@ import { KNOWLEDGE_VECTOR_STORE_NAME } from './knowledge/config';
 import { knowledgeVectorStore } from './knowledge/vector-store';
 import { monitoringScorers } from './scorers';
 import { prepareInterviewRoute } from './server/prepare-interview-route';
+import { voiceCapabilitiesRoute, voiceSpeechRoute } from './server/voice-routes';
 import { storage } from './storage';
 import { streamReplayCache } from './stream-cache';
 import { interviewWorkflow } from './workflows/interview-workflow';
@@ -59,9 +60,9 @@ export const mastra = new Mastra({
   cache: streamReplayCache,
   observability,
   logger: new PinoLogger({ name: 'interview-coach', level: 'info' }),
-  // Additive route the browser client calls to persist the uploaded CV and resolve
-  // the posting server-side; the interview workflow and agents are unchanged.
+  // Same-origin browser routes prepare interview inputs and proxy timed speech;
+  // the interview workflow and agents stay transport-agnostic.
   server: {
-    apiRoutes: [prepareInterviewRoute],
+    apiRoutes: [prepareInterviewRoute, voiceCapabilitiesRoute, voiceSpeechRoute],
   },
 });

@@ -38,6 +38,8 @@ export interface InterviewState {
    * which tracks the question in play and so always matches a re-emitted suspend.
    */
   lastAnsweredQuestionNumber: number;
+  /** A rejoined current question is shown in full and never replayed; the next turn clears this. */
+  suppressQuestionSpeech: boolean;
   /** The prompt shown when the run suspends for a target level. */
   levelPrompt: string | null;
   /** A between-turns status line ("Choosing the next question…"). */
@@ -64,6 +66,7 @@ export const initialInterviewState: InterviewState = {
   currentQuestion: '',
   currentQuestionNumber: 0,
   lastAnsweredQuestionNumber: 0,
+  suppressQuestionSpeech: false,
   levelPrompt: null,
   cue: null,
   closingMessage: '',
@@ -105,7 +108,11 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
       if (!action.snapshot) {
         return { ...initialInterviewState, phase: 'starting', runId: action.runId, cue: 'Reconnecting…' };
       }
-      const snapshot = { ...action.snapshot, runId: action.runId };
+      const snapshot = {
+        ...action.snapshot,
+        runId: action.runId,
+        suppressQuestionSpeech: true,
+      };
       if (snapshot.phase === 'error') {
         return { ...snapshot, phase: 'starting', error: null, cue: 'Reconnecting…' };
       }
@@ -121,19 +128,32 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
         // orphan check if a reload lands before the run receives this answer.
         lastAnsweredQuestionNumber: state.currentQuestionNumber,
         currentQuestion: '',
+        suppressQuestionSpeech: false,
         cue: 'Weighing your answer…',
       };
 
     // Setup finished before the level question, so this stays on the interview scene
     // (the between-turns cue), never back on the loading screen.
     case 'SUBMIT_LEVEL':
-      return { ...state, phase: 'assessing', levelPrompt: null, cue: 'Choosing the next question…' };
+      return {
+        ...state,
+        phase: 'assessing',
+        suppressQuestionSpeech: false,
+        levelPrompt: null,
+        cue: 'Choosing the next question…',
+      };
 
     case 'CLOSING_REVEALED':
       return { ...state, closingRevealed: true };
 
     case 'RETRY':
-      return { ...state, phase: 'assessing', error: null, cue: 'Retrying the turn…' };
+      return {
+        ...state,
+        phase: 'assessing',
+        suppressQuestionSpeech: false,
+        error: null,
+        cue: 'Retrying the turn…',
+      };
 
     case 'RESET':
       return initialInterviewState;

@@ -16,6 +16,7 @@ answer-craft guidance (see [Coaching knowledge](#coaching-knowledge)).
 - Node.js ≥ 22.13
 - An Anthropic API key (interview, grading, coaching)
 - An OpenAI API key (embeddings for the coach's retrieval; the interview itself runs without it)
+- Optional: an ElevenLabs API key for spoken questions in the browser
 
 ## Setup
 
@@ -24,6 +25,10 @@ npm install
 cd web && npm install && cd ..
 cp .env.example .env   # then set ANTHROPIC_API_KEY (and OPENAI_API_KEY for coached advice)
 ```
+
+Set `ELEVENLABS_API_KEY` to speak browser interview questions. The API key alone uses the built-in
+Bella English voice and Eleven Flash v2.5. `ELEVENLABS_VOICE_ID` and
+`ELEVENLABS_TTS_MODEL` can override those server-side defaults.
 
 ## Running an interview in the browser
 
@@ -43,15 +48,28 @@ Open http://localhost:5173 and run an interview:
 1. Upload your CV (`.pdf`, `.txt`, or `.md`).
 2. Give the job posting as a link or pasted text.
 3. Click **Raise the curtain**. The interviewer asks which seniority level to target (junior,
-   mid-level, senior, or staff), then asks questions one at a time; each question streams in as
-   the model writes it.
+   mid-level, senior, or staff), then asks questions one at a time. When ElevenLabs is configured,
+   the browser waits for each complete question, speaks it, and reveals the text from ElevenLabs'
+   character timing. The answer card appears after playback. Without voice, questions use the
+   typed reveal.
 4. Answer each question in the cue card and deliver it. When the interviewer has enough signal,
    the session ends and the coaching report streams in, with the full transcript and advice for
    each answer.
 
 The sidebar lists your past runs, and opening a finished one shows its report. The Vite server
-proxies `/api` and `/prepare-interview` to `http://localhost:4111`, so the browser stays
+proxies `/api`, `/prepare-interview`, and `/voice` to `http://localhost:4111`, so the browser stays
 same-origin and needs no CORS setup. Point the proxy at another host with `MASTRA_SERVER_URL`.
+
+Voice is limited to browser interview questions. The target-level prompt, closing, report, and CLI
+stay silent. The browser checks `GET /voice/capabilities` when an interview starts. The response
+contains only a capability boolean; the API key and voice settings stay on the Mastra server.
+Speech or playback errors, including audio decoding failures, show the complete question and
+enable the typed answer. The next question tries voice again.
+
+If questions stay in text mode, restart the Mastra server after setting `ELEVENLABS_API_KEY`, then
+open `http://localhost:5173/voice/capabilities`. A configured server returns `{"speech":true}`.
+A failed capability request keeps text mode, as does `{"speech":false}` or a browser without MP3
+playback support.
 
 Build the UI for static hosting with `cd web && npm run build` (output in `web/dist/`,
 gitignored).

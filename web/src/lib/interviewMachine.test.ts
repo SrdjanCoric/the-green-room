@@ -159,6 +159,7 @@ describe('interviewReducer', () => {
     expect(state.phase).not.toBe('starting');
     expect(state.levelPrompt).toBeNull();
     expect(state.cue).toMatch(/choosing the next question/i);
+    expect(state.suppressQuestionSpeech).toBe(false);
   });
 
   it('streams report tokens then settles on the structured report', () => {
@@ -203,6 +204,7 @@ describe('interviewReducer', () => {
     expect(state.transcript).toEqual([{ question: 'Q1', answer: 'A1' }]);
     expect(state.currentQuestion).toBe('Q2?');
     expect(state.currentQuestionNumber).toBe(2);
+    expect(state.suppressQuestionSpeech).toBe(true);
   });
 
   it('reconnects cold (no snapshot) into a starting phase with a reconnect cue', () => {
