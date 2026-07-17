@@ -11,6 +11,7 @@ import {
   type PrepareInterviewRequest,
   type PrepareInterviewResponse,
 } from './lib/api';
+import { AnswerTranscriptionController } from './lib/answerTranscriptionController';
 import { createMastraInterviewClient } from './lib/mastraInterviewClient';
 import { QuestionSpeechController } from './lib/questionSpeechController';
 import { cacheReport, loadCachedReport } from './lib/reportCache';
@@ -21,10 +22,15 @@ import {
   updateEntry,
   upsertEntry,
 } from './lib/runHistory';
+import { createScribeRealtimeClient } from './lib/scribeRealtimeClient';
 import { createSpeechPlayer } from './lib/speechPlayer';
 import { safeSetItem } from './lib/storage';
 import type { InterviewClient, InterviewReport, StartInterviewInput } from './lib/types';
-import { detectQuestionSpeech } from './lib/voiceApi';
+import {
+  detectVoiceCapabilities,
+  requestTranscriptionToken,
+  type VoiceCapabilities,
+} from './lib/voiceApi';
 
 const CANDIDATE_KEY = 'green-room:candidate';
 
@@ -36,16 +42,18 @@ type Route =
 export interface AppProps {
   client?: InterviewClient;
   prepare?: (request: PrepareInterviewRequest) => Promise<PrepareInterviewResponse>;
-  detectVoice?: () => Promise<boolean>;
+  detectVoice?: () => Promise<VoiceCapabilities | boolean>;
   questionSpeech?: QuestionSpeechController;
+  answerTranscription?: AnswerTranscriptionController;
   storage?: Storage;
 }
 
 export function App({
   client,
   prepare = defaultPrepare,
-  detectVoice = detectQuestionSpeech,
+  detectVoice = detectVoiceCapabilities,
   questionSpeech,
+  answerTranscription,
   storage,
 }: AppProps) {
   const store = storage ?? window.localStorage;
@@ -59,7 +67,16 @@ export function App({
   const defaultQuestionSpeechRef = useRef<QuestionSpeechController | null>(null);
   defaultQuestionSpeechRef.current ??= new QuestionSpeechController(createSpeechPlayer());
   const speechController = questionSpeech ?? defaultQuestionSpeechRef.current;
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const defaultTranscriptionRef = useRef<AnswerTranscriptionController | null>(null);
+  defaultTranscriptionRef.current ??= new AnswerTranscriptionController({
+    getToken: (signal) => requestTranscriptionToken({ signal }),
+    realtime: createScribeRealtimeClient(),
+  });
+  const transcriptionController = answerTranscription ?? defaultTranscriptionRef.current;
+  const [voiceCapabilities, setVoiceCapabilities] = useState<VoiceCapabilities>({
+    speech: false,
+    transcription: false,
+  });
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
   const [history, setHistory] = useState<RunHistoryEntry[]>(() => loadHistory(store));
   const [busy, setBusy] = useState(false);
@@ -202,7 +219,7 @@ export function App({
     setBusy(true);
     setPrepError(null);
     try {
-      const [prepared, canSpeak] = await Promise.all([
+      const [prepared, detectedVoice] = await Promise.all([
         prepare({
           cv: payload.cv,
           job: payload.job,
@@ -210,7 +227,7 @@ export function App({
         }),
         detectVoice().catch(() => false),
       ]);
-      setVoiceEnabled(canSpeak);
+      setVoiceCapabilities(normalizeVoiceCapabilities(detectedVoice));
       if (prepared.postingFetchFailedUrl) {
         setPrepError(
           `Couldn't read the posting at ${prepared.postingFetchFailedUrl}. Paste the posting text instead.`,
@@ -242,8 +259,8 @@ export function App({
 
   function refreshVoiceCapability(): Promise<void> {
     return detectVoice()
-      .then(setVoiceEnabled)
-      .catch(() => setVoiceEnabled(false));
+      .then((capabilities) => setVoiceCapabilities(normalizeVoiceCapabilities(capabilities)))
+      .catch(() => setVoiceCapabilities({ speech: false, transcription: false }));
   }
 
   function rejoin(runId: string) {
@@ -292,7 +309,8 @@ export function App({
         activeRunId={interview.state.runId}
         onNew={() => {
           speechController.cancel();
-          setVoiceEnabled(false);
+          transcriptionController.abort();
+          setVoiceCapabilities({ speech: false, transcription: false });
           setViewedReport(null);
           navigate({ name: 'setup' });
         }}
@@ -336,8 +354,10 @@ export function App({
       return (
         <InterviewScreen
           state={interview.state}
-          voiceEnabled={voiceEnabled}
+          voiceEnabled={voiceCapabilities.speech}
+          transcriptionEnabled={voiceCapabilities.transcription}
           questionSpeech={speechController}
+          answerTranscription={transcriptionController}
           onSubmitAnswer={interview.submitAnswer}
           onSubmitLevel={(level) => {
             // Record the chosen level on the live history entry so the playbill shows it.
@@ -363,6 +383,14 @@ function parseHash(hash: string): Route {
 function toHash(route: Route): string {
   if (route.name === 'setup') return '#/setup';
   return `#/${route.name}/${route.runId}`;
+}
+
+function normalizeVoiceCapabilities(
+  value: VoiceCapabilities | boolean,
+): VoiceCapabilities {
+  return typeof value === 'boolean'
+    ? { speech: value, transcription: value }
+    : value;
 }
 
 function candidateId(store: Storage): string {

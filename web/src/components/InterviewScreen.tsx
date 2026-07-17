@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
+import type { AnswerTranscriptionController } from '../lib/answerTranscriptionController';
+
 import { useFocusOnMount } from '../hooks/useFocusOnMount';
 import { usePrefersReducedMotion } from '../hooks/usePrefersReducedMotion';
 import { useStickToBottom } from '../hooks/useStickToBottom';
@@ -16,6 +18,10 @@ export interface InterviewScreenProps {
   voiceEnabled?: boolean;
   /** Run-scoped controller that deduplicates and cancels browser utterances. */
   questionSpeech?: QuestionSpeechController;
+  /** Whether the server can mint Scribe tokens for browser dictation. */
+  transcriptionEnabled?: boolean;
+  /** Browser-memory-only owner of the current dictated answer segment. */
+  answerTranscription?: AnswerTranscriptionController;
 }
 
 /**
@@ -30,6 +36,8 @@ export function InterviewScreen({
   onClosingRevealed,
   voiceEnabled = false,
   questionSpeech,
+  transcriptionEnabled = false,
+  answerTranscription,
 }: InterviewScreenProps) {
   const streaming = state.phase === 'streamingQuestion';
   const awaitingAnswer = state.phase === 'awaitingAnswer';
@@ -217,6 +225,8 @@ export function InterviewScreen({
           label="Your answer"
           placeholder="Deliver your line. The specifics, in your own voice."
           tip="Play it like the real thing. Detail beats polish."
+          transcriptionEnabled={transcriptionEnabled}
+          transcription={answerTranscription}
           onDeliver={onSubmitAnswer}
         />
       )}
@@ -414,12 +424,43 @@ interface CueCardProps {
   label: string;
   placeholder: string;
   tip: string;
+  transcriptionEnabled: boolean;
+  transcription?: AnswerTranscriptionController;
   onDeliver: (value: string) => void;
 }
 
-function CueCard({ label, placeholder, tip, onDeliver }: CueCardProps) {
+function formatElapsed(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function CueCard({
+  label,
+  placeholder,
+  tip,
+  transcriptionEnabled,
+  transcription,
+  onDeliver,
+}: CueCardProps) {
   const [value, setValue] = useState('');
   const [sent, setSent] = useState(false);
+  const [dictation, setDictation] = useState(() => transcription?.getSnapshot());
+  useEffect(() => {
+    if (!transcription) return;
+    const unsubscribe = transcription.subscribe(() => {
+      const next = transcription.getSnapshot();
+      setDictation(next);
+      if (next.phase !== 'ready') setValue(next.text);
+    });
+    return () => {
+      unsubscribe();
+      transcription.abort();
+    };
+  }, [transcription]);
+  const capturing =
+    dictation?.phase === 'connecting' ||
+    dictation?.phase === 'listening' ||
+    dictation?.phase === 'finalizing';
   // A synchronous latch: two clicks landing in the same tick (before `sent` re-renders
   // the button disabled) still deliver the line exactly once.
   const deliveredRef = useRef(false);
@@ -428,6 +469,7 @@ function CueCard({ label, placeholder, tip, onDeliver }: CueCardProps) {
     const trimmed = value.trim();
     if (!trimmed || deliveredRef.current) return;
     deliveredRef.current = true;
+    transcription?.prepareForDelivery();
     setSent(true);
     onDeliver(trimmed);
     setValue('');
@@ -441,15 +483,52 @@ function CueCard({ label, placeholder, tip, onDeliver }: CueCardProps) {
           placeholder={placeholder}
           value={value}
           disabled={sent}
+          readOnly={capturing}
           onChange={(e) => setValue(e.target.value)}
         />
       </div>
+      {!transcriptionEnabled && (
+        <p className="dictation-unavailable">
+          Dictation is unavailable. You can type and deliver your answer normally.
+        </p>
+      )}
+      {transcriptionEnabled && transcription && (
+        <div className="dictation">
+          <div className="dictation-controls">
+            {(dictation?.phase === 'ready' || dictation?.phase === 'failed') && (
+              <button
+                className="dictate"
+                type="button"
+                disabled={sent}
+                onClick={() => void transcription.start(value)}
+              >
+                {dictation.phase === 'failed' ? 'Try again' : 'Start answering'}
+              </button>
+            )}
+            {dictation?.phase === 'listening' && (
+              <button className="dictate" type="button" onClick={() => transcription.stop()}>
+                Stop answering
+              </button>
+            )}
+            {dictation && dictation.phase !== 'ready' && (
+              <span className="dictation-status" aria-live="polite">
+                {dictation.status}
+                {dictation.phase === 'listening' && ` ${formatElapsed(dictation.elapsedSeconds)}`}
+              </span>
+            )}
+          </div>
+          <p className="disclosure">
+            Microphone audio goes directly to ElevenLabs for realtime transcription and is not
+            stored by this app.
+          </p>
+        </div>
+      )}
       <div className="row">
         <span className="tip">{tip}</span>
         <button
           className="deliver"
           type="button"
-          disabled={sent || value.trim().length === 0}
+          disabled={sent || capturing || value.trim().length === 0}
           onClick={deliver}
         >
           Deliver ▸

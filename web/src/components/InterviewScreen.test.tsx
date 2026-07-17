@@ -3,6 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { StrictMode, useState } from 'react';
 
+import {
+  AnswerTranscriptionController,
+  type RealtimeTranscriptionHandlers,
+  type RealtimeTranscriptionSession,
+} from '../lib/answerTranscriptionController';
 import { initialInterviewState, type InterviewState } from '../lib/interviewMachine';
 import { QuestionSpeechController } from '../lib/questionSpeechController';
 import type { SpeakQuestionOptions, SpeechPlayer } from '../lib/speechPlayer';
@@ -10,6 +15,25 @@ import { InterviewScreen } from './InterviewScreen';
 
 function stateWith(overrides: Partial<InterviewState>): InterviewState {
   return { ...initialInterviewState, ...overrides };
+}
+
+function transcriptionDouble(getToken = vi.fn(async () => 'sutkn_one-use')) {
+  let handlers: RealtimeTranscriptionHandlers | undefined;
+  const session: RealtimeTranscriptionSession = {
+    commit: vi.fn(),
+    mute: vi.fn(),
+    close: vi.fn(),
+  };
+  const controller = new AnswerTranscriptionController({
+    getToken,
+    realtime: {
+      connect: ({ handlers: nextHandlers }) => {
+        handlers = nextHandlers;
+        return session;
+      },
+    },
+  });
+  return { controller, getToken, session, handlers: () => handlers };
 }
 
 /**
@@ -62,6 +86,111 @@ describe('InterviewScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
 
     expect(onSubmitAnswer).toHaveBeenCalledWith('I led a migration.');
+  });
+
+  it('offers one dictated segment after playback, then delivers only the reviewed transcript', async () => {
+    let finishPlayback: (() => void) | undefined;
+    const speech = new QuestionSpeechController({
+      speak: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishPlayback = resolve;
+          }),
+      ),
+    });
+    const transcription = transcriptionDouble();
+    const onSubmitAnswer = vi.fn();
+    render(
+      <InterviewScreen
+        state={stateWith({
+          phase: 'awaitingAnswer',
+          runId: 'run-1',
+          currentQuestion: 'Proudest work?',
+          currentQuestionNumber: 1,
+        })}
+        voiceEnabled
+        transcriptionEnabled
+        questionSpeech={speech}
+        answerTranscription={transcription.controller}
+        onSubmitAnswer={onSubmitAnswer}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: /start answering/i })).not.toBeInTheDocument();
+    await act(async () => finishPlayback?.());
+    const start = screen.getByRole('button', { name: /start answering/i });
+    expect(start).toBeEnabled();
+    expect(transcription.getToken).not.toHaveBeenCalled();
+
+    await userEvent.click(start);
+    expect(transcription.getToken).toHaveBeenCalledOnce();
+    act(() => transcription.handlers()?.onSessionStarted());
+    act(() => transcription.handlers()?.onPartial('I led the migration'));
+    const answer = screen.getByLabelText(/your answer/i);
+    expect(answer).toHaveValue('I led the migration');
+    expect(answer).toHaveAttribute('readonly');
+    expect(screen.getByText(/listening/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /stop answering/i }));
+    expect(transcription.session.commit).toHaveBeenCalledOnce();
+    act(() => transcription.handlers()?.onCommitted('I led the migration.'));
+    expect(answer).not.toHaveAttribute('readonly');
+    await userEvent.type(answer, ' It cut deploy time in half.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+
+    expect(onSubmitAnswer).toHaveBeenCalledExactlyOnceWith(
+      'I led the migration. It cut deploy time in half.',
+    );
+    expect(transcription.session.close).toHaveBeenCalledOnce();
+  });
+
+  it('keeps typing available after microphone or realtime failure and retries only when asked', async () => {
+    const transcription = transcriptionDouble();
+    const onSubmitAnswer = vi.fn();
+    render(
+      <InterviewScreen
+        state={stateWith({ phase: 'awaitingAnswer', currentQuestion: 'Proudest work?' })}
+        transcriptionEnabled
+        answerTranscription={transcription.controller}
+        onSubmitAnswer={onSubmitAnswer}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    const answer = screen.getByLabelText(/your answer/i);
+    await userEvent.type(answer, 'Typed fallback.');
+    await userEvent.click(screen.getByRole('button', { name: /start answering/i }));
+    act(() => transcription.handlers()?.onError());
+
+    expect(await screen.findByText(/dictation was interrupted/i)).toBeInTheDocument();
+    expect(answer).not.toHaveAttribute('readonly');
+    expect(answer).toHaveValue('Typed fallback.');
+    expect(transcription.getToken).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+    expect(onSubmitAnswer).toHaveBeenCalledExactlyOnceWith('Typed fallback.');
+    expect(transcription.getToken).toHaveBeenCalledOnce();
+  });
+
+  it('closes active dictation when the answer card unmounts', async () => {
+    const transcription = transcriptionDouble();
+    const { unmount } = render(
+      <InterviewScreen
+        state={stateWith({ phase: 'awaitingAnswer', currentQuestion: 'Proudest work?' })}
+        transcriptionEnabled
+        answerTranscription={transcription.controller}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /start answering/i }));
+    act(() => transcription.handlers()?.onSessionStarted());
+
+    unmount();
+
+    expect(transcription.session.close).toHaveBeenCalledOnce();
   });
 
   it('disables the Deliver button the moment an answer is delivered, so a double-click sends once', async () => {
