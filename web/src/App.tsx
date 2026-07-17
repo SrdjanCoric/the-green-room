@@ -113,7 +113,7 @@ export function App({
 
   // When the run finishes, cache the report and mark the run closed. This runs from
   // the stream-consumption path (an event); showing the notes is the effect below,
-  // which can wait for the goodbye to finish typing first.
+  // which can wait for the goodbye's typed or spoken delivery to finish first.
   const handleCompleted = useCallback(
     (report: InterviewReport, runId: string) => {
       cacheReport(store, runId, report);
@@ -165,8 +165,8 @@ export function App({
     }
   });
 
-  // Show the notes once the run has finished — but if the candidate is watching the
-  // interview scene mid-goodbye, hold the curtain until the line finishes typing.
+  // Show the notes once the run has finished. If the candidate is watching the
+  // interview scene mid-goodbye, hold the curtain until the active delivery finishes.
   // The effect only writes the hash (syncing to the browser); the hashchange
   // listener above carries it into the route state. It surfaces each finished run
   // exactly once — the latch keeps it from enforcing the report route forever, which

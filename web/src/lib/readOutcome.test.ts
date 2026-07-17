@@ -120,6 +120,27 @@ describe('readOutcome', () => {
     });
   });
 
+  it('carries the authoritative complete closing from a successful run', () => {
+    const event = readOutcome({
+      status: 'success',
+      result: {
+        closingMessage: 'Thanks for walking me through the migration today.',
+        transcript: [],
+        coaching: {
+          summary: 'Solid.',
+          answerAdvice: [],
+          drills: [],
+          studyPlan: 'Keep going.',
+        },
+      },
+    });
+
+    expect(event).toMatchObject({
+      type: 'completed',
+      closingMessage: 'Thanks for walking me through the migration today.',
+    });
+  });
+
   it('populates role and company from the real workflow result field (roleContext)', () => {
     // The workflow result carries the role under `roleContext` (roleContextSchema),
     // never a bare `role`. A run that resolved a posting must surface both onto the

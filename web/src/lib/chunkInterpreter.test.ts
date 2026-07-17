@@ -69,6 +69,18 @@ describe('createChunkInterpreter', () => {
     });
   });
 
+  it('marks the closing settled as soon as the grade step starts', () => {
+    const interp = createChunkInterpreter();
+    interp.next(workflowStep('closing'));
+    interp.next({ from: 'AGENT', type: 'text-start', payload: {} });
+    interp.next(textDelta('Thanks for today.'));
+
+    expect(interp.next(workflowStep('grade'))).toEqual({
+      type: 'closing-settled',
+      cue: 'Grading your answers…',
+    });
+  });
+
   it('routes agent tokens to the report while the coach step is active', () => {
     const interp = createChunkInterpreter();
     interp.next(workflowStep('coach'));

@@ -34,10 +34,12 @@ export type InterviewEvent =
   | { type: 'question-delta'; text: string }
   | { type: 'closing-start' }
   | { type: 'closing-delta'; text: string }
+  /** The next post-closing workflow step started, so the complete line is ready. */
+  | { type: 'closing-settled'; cue: string }
   | { type: 'report-start' }
   | { type: 'report-delta'; text: string }
   | { type: 'suspended'; suspend: SuspendPayload }
-  | { type: 'completed'; report: InterviewReport }
+  | { type: 'completed'; report: InterviewReport; closingMessage?: string }
   | { type: 'failed'; message: string };
 
 /** The optional advanced "ensemble" overrides from the setup form. */
