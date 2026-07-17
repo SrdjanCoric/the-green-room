@@ -29,8 +29,9 @@ cv/
 # Planning notes and task files (source of truth lives in the working checkout only)
 plans/
 
-# Task review output (branch-scoped, ephemeral)
+# Task review and bug notes (local working records, never shipped)
 reviews/
+bugs/
 
 # Playwright MCP browser-session scratch artifacts
 .playwright-mcp/

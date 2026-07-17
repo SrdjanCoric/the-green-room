@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { PrepareInterviewResponse } from './lib/api';
 import { initialInterviewState } from './lib/interviewMachine';
+import { QuestionSpeechController } from './lib/questionSpeechController';
 import { loadSession, saveSession } from './lib/sessionStore';
+import type { SpeechPlayer } from './lib/speechPlayer';
 import type { InterviewClient, InterviewEvent, InterviewReport } from './lib/types';
 
 const report: InterviewReport = {
@@ -88,6 +90,30 @@ describe('App — full interview flow', () => {
     // The finished run is recorded in the playbill.
     expect(screen.getByText('Staff Engineer')).toBeInTheDocument();
     expect(screen.getByText(/★ closed/i)).toBeInTheDocument();
+  });
+
+  it('checks voice capability from Raise the curtain and enables spoken questions', async () => {
+    const detectVoice = vi.fn(async () => true);
+    const speak = vi.fn(async () => undefined);
+    const player: SpeechPlayer = { speak };
+    render(
+      <App
+        client={mockClient()}
+        prepare={vi.fn(async () => prepared)}
+        detectVoice={detectVoice}
+        questionSpeech={new QuestionSpeechController(player)}
+        storage={window.localStorage}
+      />,
+    );
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+
+    expect(detectVoice).toHaveBeenCalledOnce();
+    expect(await screen.findByLabelText(/your answer/i)).toBeInTheDocument();
+    expect(speak).toHaveBeenCalledOnce();
   });
 
   it('surfaces the report once, without trapping later navigation', async () => {

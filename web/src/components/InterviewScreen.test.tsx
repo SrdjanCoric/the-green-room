@@ -1,9 +1,11 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 
 import { initialInterviewState, type InterviewState } from '../lib/interviewMachine';
+import { QuestionSpeechController } from '../lib/questionSpeechController';
+import type { SpeakQuestionOptions, SpeechPlayer } from '../lib/speechPlayer';
 import { InterviewScreen } from './InterviewScreen';
 
 function stateWith(overrides: Partial<InterviewState>): InterviewState {
@@ -123,6 +125,239 @@ describe('InterviewScreen', () => {
 
     expect(await screen.findByText(/walk me/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+  });
+
+  it('hides streamed deltas in voice mode and gates answering on authoritative playback', async () => {
+    let finishPlayback: (() => void) | undefined;
+    const onProgress: ((prefix: string) => void)[] = [];
+    const speak = vi.fn(
+      ({ onProgress: progress }: SpeakQuestionOptions) =>
+        new Promise<void>((resolve) => {
+          onProgress.push(progress);
+          finishPlayback = resolve;
+        }),
+    );
+    const player: SpeechPlayer = { speak };
+    const questionSpeech = new QuestionSpeechController(player);
+    const { rerender } = render(
+      <InterviewScreen
+        state={stateWith({ phase: 'streamingQuestion', runId: 'run-1', currentQuestion: 'Partial' })}
+        voiceEnabled
+        questionSpeech={questionSpeech}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('Partial')).not.toBeInTheDocument();
+    expect(screen.getByText(/preparing the next question/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+
+    rerender(
+      <InterviewScreen
+        state={stateWith({
+          phase: 'awaitingAnswer',
+          runId: 'run-1',
+          currentQuestion: 'Authoritative question?',
+          currentQuestionNumber: 1,
+        })}
+        voiceEnabled
+        questionSpeech={questionSpeech}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+    expect(speak).toHaveBeenCalledOnce();
+    expect(screen.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+
+    act(() => onProgress[0]?.('Authoritative'));
+    expect(screen.getByText('Authoritative')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('');
+
+    await act(async () => finishPlayback?.());
+    expect(screen.getAllByText('Authoritative question?')).toHaveLength(2);
+    expect(screen.getByLabelText(/your answer/i)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Authoritative question?');
+  });
+
+  it('cancels stale playback and speaks only an authoritative replacement', async () => {
+    const signals: AbortSignal[] = [];
+    let finishReplacement: (() => void) | undefined;
+    const speak = vi.fn(
+      ({ signal }: SpeakQuestionOptions) =>
+        new Promise<void>((resolve, reject) => {
+          signals.push(signal);
+          if (signals.length === 2) finishReplacement = resolve;
+          signal.addEventListener(
+            'abort',
+            () => reject(new DOMException('replaced', 'AbortError')),
+            { once: true },
+          );
+        }),
+    );
+    const questionSpeech = new QuestionSpeechController({ speak });
+    const { rerender } = render(
+      <InterviewScreen
+        state={stateWith({
+          phase: 'awaitingAnswer',
+          runId: 'run-1',
+          currentQuestion: 'First attempt?',
+          currentQuestionNumber: 2,
+        })}
+        voiceEnabled
+        questionSpeech={questionSpeech}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledOnce());
+
+    rerender(
+      <InterviewScreen
+        state={stateWith({
+          phase: 'awaitingAnswer',
+          runId: 'run-1',
+          currentQuestion: 'Replacement question?',
+          currentQuestionNumber: 2,
+        })}
+        voiceEnabled
+        questionSpeech={questionSpeech}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
+    expect(signals[0]?.aborted).toBe(true);
+    expect(screen.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+    await act(async () => finishReplacement?.());
+    expect(screen.getAllByText('Replacement question?')).toHaveLength(2);
+    expect(screen.getByLabelText(/your answer/i)).toBeInTheDocument();
+  });
+
+  it('falls back to the full typed question when spoken delivery fails', async () => {
+    const player: SpeechPlayer = {
+      speak: vi.fn(async () => Promise.reject(new Error('decode failed'))),
+    };
+    render(
+      <InterviewScreen
+        state={stateWith({
+          phase: 'awaitingAnswer',
+          runId: 'run-1',
+          currentQuestion: 'What did you learn?',
+          currentQuestionNumber: 2,
+        })}
+        voiceEnabled
+        questionSpeech={new QuestionSpeechController(player)}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText(/your answer/i)).toBeInTheDocument();
+    expect(screen.getAllByText('What did you learn?')).toHaveLength(2);
+  });
+
+  it('shows the full spoken question when playback starts under reduced motion', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes('reduce'),
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    let finishPlayback: (() => void) | undefined;
+    const speak = vi.fn(
+      ({ onPlaybackStart }: SpeakQuestionOptions) =>
+        new Promise<void>((resolve) => {
+          onPlaybackStart?.();
+          finishPlayback = resolve;
+        }),
+    );
+    const player: SpeechPlayer = { speak };
+    try {
+      render(
+        <InterviewScreen
+          state={stateWith({
+            phase: 'awaitingAnswer',
+            runId: 'run-1',
+            currentQuestion: 'A reduced-motion question?',
+            currentQuestionNumber: 2,
+          })}
+          voiceEnabled
+          questionSpeech={new QuestionSpeechController(player)}
+          onSubmitAnswer={vi.fn()}
+          onSubmitLevel={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText('A reduced-motion question?')).toBeInTheDocument();
+      expect(screen.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+      await act(async () => finishPlayback?.());
+      expect(screen.getByLabelText(/your answer/i)).toBeInTheDocument();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it('shows a reconnected question in full without replaying it', () => {
+    const speak = vi.fn(async () => undefined);
+    const player: SpeechPlayer = { speak };
+    render(
+      <InterviewScreen
+        state={stateWith({
+          phase: 'awaitingAnswer',
+          runId: 'run-1',
+          currentQuestion: 'Current saved question?',
+          currentQuestionNumber: 3,
+          suppressQuestionSpeech: true,
+        })}
+        voiceEnabled
+        questionSpeech={new QuestionSpeechController(player)}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText(/your answer/i)).toBeInTheDocument();
+    expect(screen.getAllByText('Current saved question?')).toHaveLength(2);
+    expect(speak).not.toHaveBeenCalled();
+  });
+
+  it('keeps the level prompt silent in voice mode', () => {
+    const speak = vi.fn(async () => undefined);
+    const player: SpeechPlayer = { speak };
+    render(
+      <InterviewScreen
+        state={stateWith({ phase: 'awaitingLevel', runId: 'run-1', levelPrompt: 'What level?' })}
+        voiceEnabled
+        questionSpeech={new QuestionSpeechController(player)}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('What level?')).toBeInTheDocument();
+    expect(speak).not.toHaveBeenCalled();
+  });
+
+  it('keeps the interviewer closing silent in voice mode', () => {
+    const speak = vi.fn(async () => undefined);
+    render(
+      <InterviewScreen
+        state={stateWith({ phase: 'closing', runId: 'run-1', closingMessage: 'Thanks for today.' })}
+        voiceEnabled
+        questionSpeech={new QuestionSpeechController({ speak })}
+        onSubmitAnswer={vi.fn()}
+        onSubmitLevel={vi.fn()}
+      />,
+    );
+
+    expect(speak).not.toHaveBeenCalled();
   });
 
   it('types the question out over time instead of stamping it', async () => {

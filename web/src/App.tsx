@@ -12,6 +12,7 @@ import {
   type PrepareInterviewResponse,
 } from './lib/api';
 import { createMastraInterviewClient } from './lib/mastraInterviewClient';
+import { QuestionSpeechController } from './lib/questionSpeechController';
 import { cacheReport, loadCachedReport } from './lib/reportCache';
 import {
   loadHistory,
@@ -20,8 +21,10 @@ import {
   updateEntry,
   upsertEntry,
 } from './lib/runHistory';
+import { createSpeechPlayer } from './lib/speechPlayer';
 import { safeSetItem } from './lib/storage';
 import type { InterviewClient, InterviewReport, StartInterviewInput } from './lib/types';
+import { detectQuestionSpeech } from './lib/voiceApi';
 
 const CANDIDATE_KEY = 'green-room:candidate';
 
@@ -33,10 +36,18 @@ type Route =
 export interface AppProps {
   client?: InterviewClient;
   prepare?: (request: PrepareInterviewRequest) => Promise<PrepareInterviewResponse>;
+  detectVoice?: () => Promise<boolean>;
+  questionSpeech?: QuestionSpeechController;
   storage?: Storage;
 }
 
-export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
+export function App({
+  client,
+  prepare = defaultPrepare,
+  detectVoice = detectQuestionSpeech,
+  questionSpeech,
+  storage,
+}: AppProps) {
   const store = storage ?? window.localStorage;
   // The production client shares the injected storage, so its run bookkeeping and
   // the hook's session snapshots always live (and are cleared) in the same place.
@@ -45,6 +56,10 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     [client, store],
   );
 
+  const defaultQuestionSpeechRef = useRef<QuestionSpeechController | null>(null);
+  defaultQuestionSpeechRef.current ??= new QuestionSpeechController(createSpeechPlayer());
+  const speechController = questionSpeech ?? defaultQuestionSpeechRef.current;
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
   const [history, setHistory] = useState<RunHistoryEntry[]>(() => loadHistory(store));
   const [busy, setBusy] = useState(false);
@@ -144,7 +159,10 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     rejoinedRef.current = true;
     if (route.name !== 'interview' || interview.state.runId) return;
     const entry = history.find((e) => e.runId === route.runId);
-    if (entry?.status === 'live') interview.reconnect(route.runId);
+    if (entry?.status === 'live') {
+      void refreshVoiceCapability();
+      interview.reconnect(route.runId);
+    }
   });
 
   // Show the notes once the run has finished — but if the candidate is watching the
@@ -184,11 +202,15 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     setBusy(true);
     setPrepError(null);
     try {
-      const prepared = await prepare({
-        cv: payload.cv,
-        job: payload.job,
-        postingKind: payload.postingKind,
-      });
+      const [prepared, canSpeak] = await Promise.all([
+        prepare({
+          cv: payload.cv,
+          job: payload.job,
+          postingKind: payload.postingKind,
+        }),
+        detectVoice().catch(() => false),
+      ]);
+      setVoiceEnabled(canSpeak);
       if (prepared.postingFetchFailedUrl) {
         setPrepError(
           `Couldn't read the posting at ${prepared.postingFetchFailedUrl}. Paste the posting text instead.`,
@@ -218,7 +240,16 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
     }
   }
 
+  function refreshVoiceCapability(): Promise<void> {
+    return detectVoice()
+      .then(setVoiceEnabled)
+      .catch(() => setVoiceEnabled(false));
+  }
+
   function rejoin(runId: string) {
+    // Re-detect after a reload/playbill rejoin. The restored current question is
+    // marked silent by the machine; capability applies to the following question.
+    void refreshVoiceCapability();
     // reconnect() reports back through onReconnected, which marks the run live.
     interview.reconnect(runId);
     navigate({ name: 'interview', runId });
@@ -260,6 +291,8 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
         history={history}
         activeRunId={interview.state.runId}
         onNew={() => {
+          speechController.cancel();
+          setVoiceEnabled(false);
           setViewedReport(null);
           navigate({ name: 'setup' });
         }}
@@ -303,6 +336,8 @@ export function App({ client, prepare = defaultPrepare, storage }: AppProps) {
       return (
         <InterviewScreen
           state={interview.state}
+          voiceEnabled={voiceEnabled}
+          questionSpeech={speechController}
           onSubmitAnswer={interview.submitAnswer}
           onSubmitLevel={(level) => {
             // Record the chosen level on the live history entry so the playbill shows it.
