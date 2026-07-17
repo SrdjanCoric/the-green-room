@@ -6,12 +6,20 @@ import {
   createElevenLabsSpeechAdapter,
   SpeechProviderError,
 } from './elevenlabs-speech';
+import {
+  createElevenLabsTranscriptionTokenAdapter,
+  TranscriptionTokenProviderError,
+} from './elevenlabs-transcription';
 
 export const MAX_SPEECH_CHARACTERS = 2_000;
 export const MAX_SPEECH_BODY_BYTES = 12 * 1_024;
 
 export interface SpeechAdapter {
   synthesize(text: string, signal: AbortSignal): Promise<ReadableStream<VoiceSpeechChunk>>;
+}
+
+export interface TranscriptionTokenAdapter {
+  create(signal: AbortSignal): Promise<string>;
 }
 
 export interface VoiceRouteContext {
@@ -24,10 +32,39 @@ export interface VoiceRouteContext {
 
 export function createVoiceCapabilitiesHandler({
   speechAvailable,
+  transcriptionAvailable,
 }: {
   speechAvailable: boolean;
+  transcriptionAvailable: boolean;
 }) {
-  return (c: VoiceRouteContext): Response => c.json({ speech: speechAvailable });
+  return (c: VoiceRouteContext): Response =>
+    c.json({ speech: speechAvailable, transcription: transcriptionAvailable });
+}
+
+export function createTranscriptionTokenHandler({
+  adapter,
+}: {
+  adapter: TranscriptionTokenAdapter | undefined;
+}) {
+  return async (c: VoiceRouteContext): Promise<Response> => {
+    if (!adapter) return c.json({ error: 'Dictation is unavailable.' }, 503);
+
+    let token: string;
+    try {
+      token = await adapter.create(c.req.raw?.signal ?? new AbortController().signal);
+    } catch (error) {
+      const status =
+        error instanceof TranscriptionTokenProviderError && error.kind === 'timeout' ? 504 : 502;
+      return c.json({ error: 'Dictation is unavailable.' }, status);
+    }
+
+    return new Response(JSON.stringify({ token }), {
+      headers: {
+        'cache-control': 'no-store',
+        'content-type': 'application/json',
+      },
+    });
+  };
 }
 
 export function createVoiceSpeechHandler({ adapter }: { adapter: SpeechAdapter | undefined }) {
@@ -96,6 +133,9 @@ const speechAdapter = apiKey
       model: nonEmptyEnvironmentValue('ELEVENLABS_TTS_MODEL'),
     })
   : undefined;
+const transcriptionTokenAdapter = apiKey
+  ? createElevenLabsTranscriptionTokenAdapter({ apiKey })
+  : undefined;
 
 function nonEmptyEnvironmentValue(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -104,9 +144,10 @@ function nonEmptyEnvironmentValue(name: string): string | undefined {
 
 export const voiceCapabilitiesRoute = registerApiRoute('/voice/capabilities', {
   method: 'GET',
-  handler: createVoiceCapabilitiesHandler({ speechAvailable: Boolean(speechAdapter) }) as Parameters<
-    typeof registerApiRoute<'/voice/capabilities'>
-  >[1]['handler'],
+  handler: createVoiceCapabilitiesHandler({
+    speechAvailable: Boolean(speechAdapter),
+    transcriptionAvailable: Boolean(transcriptionTokenAdapter),
+  }) as Parameters<typeof registerApiRoute<'/voice/capabilities'>>[1]['handler'],
 });
 
 export const voiceSpeechRoute = registerApiRoute('/voice/speech', {
@@ -116,5 +157,12 @@ export const voiceSpeechRoute = registerApiRoute('/voice/speech', {
   >[1]['middleware'],
   handler: createVoiceSpeechHandler({ adapter: speechAdapter }) as Parameters<
     typeof registerApiRoute<'/voice/speech'>
+  >[1]['handler'],
+});
+
+export const voiceTranscriptionTokenRoute = registerApiRoute('/voice/transcription-token', {
+  method: 'POST',
+  handler: createTranscriptionTokenHandler({ adapter: transcriptionTokenAdapter }) as Parameters<
+    typeof registerApiRoute<'/voice/transcription-token'>
   >[1]['handler'],
 });

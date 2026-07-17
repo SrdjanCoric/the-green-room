@@ -14,7 +14,11 @@ import { KNOWLEDGE_VECTOR_STORE_NAME } from './knowledge/config';
 import { knowledgeVectorStore } from './knowledge/vector-store';
 import { monitoringScorers } from './scorers';
 import { prepareInterviewRoute } from './server/prepare-interview-route';
-import { voiceCapabilitiesRoute, voiceSpeechRoute } from './server/voice-routes';
+import {
+  voiceCapabilitiesRoute,
+  voiceSpeechRoute,
+  voiceTranscriptionTokenRoute,
+} from './server/voice-routes';
 import { storage } from './storage';
 import { streamReplayCache } from './stream-cache';
 import { interviewWorkflow } from './workflows/interview-workflow';
@@ -63,6 +67,11 @@ export const mastra = new Mastra({
   // Same-origin browser routes prepare interview inputs and proxy timed speech;
   // the interview workflow and agents stay transport-agnostic.
   server: {
-    apiRoutes: [prepareInterviewRoute, voiceCapabilitiesRoute, voiceSpeechRoute],
+    apiRoutes: [
+      prepareInterviewRoute,
+      voiceCapabilitiesRoute,
+      voiceSpeechRoute,
+      voiceTranscriptionTokenRoute,
+    ],
   },
 });

@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from './App';
 import type { PrepareInterviewResponse } from './lib/api';
+import {
+  AnswerTranscriptionController,
+  type RealtimeTranscriptionHandlers,
+} from './lib/answerTranscriptionController';
 import { initialInterviewState } from './lib/interviewMachine';
 import { QuestionSpeechController } from './lib/questionSpeechController';
 import { loadSession, saveSession } from './lib/sessionStore';
@@ -54,6 +58,21 @@ function mockClient(): InterviewClient {
 
 const prepared: PrepareInterviewResponse = { cvPath: '/data/uploads/x.md', researchUrls: [] };
 
+function transcriptionDouble() {
+  let handlers: RealtimeTranscriptionHandlers | undefined;
+  const session = { commit: vi.fn(), mute: vi.fn(), close: vi.fn() };
+  const controller = new AnswerTranscriptionController({
+    getToken: vi.fn(async () => 'sutkn_browser-only'),
+    realtime: {
+      connect: ({ handlers: nextHandlers }) => {
+        handlers = nextHandlers;
+        return session;
+      },
+    },
+  });
+  return { controller, session, handlers: () => handlers };
+}
+
 describe('App — full interview flow', () => {
   beforeEach(() => {
     window.location.hash = '';
@@ -90,6 +109,44 @@ describe('App — full interview flow', () => {
     // The finished run is recorded in the playbill.
     expect(screen.getByText('Staff Engineer')).toBeInTheDocument();
     expect(screen.getByText(/★ closed/i)).toBeInTheDocument();
+  });
+
+  it('keeps partial dictation and its token out of persistence and resumes with only the reviewed answer', async () => {
+    const transcription = transcriptionDouble();
+    const resume = vi.fn(() => resumeEvents());
+    render(
+      <App
+        client={{ ...mockClient(), resume }}
+        prepare={vi.fn(async () => prepared)}
+        detectVoice={vi.fn(async () => ({ speech: false, transcription: true }))}
+        answerTranscription={transcription.controller}
+        storage={window.localStorage}
+      />,
+    );
+
+    await userEvent.upload(screen.getByLabelText(/cv file/i), new File(['# CV'], 'me.md'));
+    await userEvent.click(screen.getByRole('button', { name: /paste/i }));
+    await userEvent.type(screen.getByLabelText(/posting text/i), 'Staff Engineer.');
+    await userEvent.click(screen.getByRole('button', { name: /raise the curtain/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /start answering/i }));
+    act(() => transcription.handlers()?.onSessionStarted());
+    act(() => transcription.handlers()?.onPartial('unreviewed partial words'));
+
+    const persisted = Array.from(
+      { length: window.localStorage.length },
+      (_, index) => window.localStorage.getItem(window.localStorage.key(index) ?? ''),
+    ).join('\n');
+    expect(persisted).not.toContain('unreviewed partial words');
+    expect(persisted).not.toContain('sutkn_browser-only');
+
+    await userEvent.click(screen.getByRole('button', { name: /stop answering/i }));
+    act(() => transcription.handlers()?.onCommitted('I led the migration.'));
+    await userEvent.type(screen.getByLabelText(/your answer/i), ' It cut deploy time in half.');
+    await userEvent.click(screen.getByRole('button', { name: /deliver/i }));
+
+    expect(resume).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      answer: 'I led the migration. It cut deploy time in half.',
+    });
   });
 
   it('checks voice capability from Raise the curtain and enables spoken questions', async () => {

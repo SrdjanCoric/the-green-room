@@ -2,14 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 
 import { SpeechProviderError } from './elevenlabs-speech';
+import { TranscriptionTokenProviderError } from './elevenlabs-transcription';
 import {
+  createTranscriptionTokenHandler,
   createVoiceBodyLimit,
   createVoiceCapabilitiesHandler,
   createVoiceSpeechHandler,
   MAX_SPEECH_CHARACTERS,
   voiceCapabilitiesRoute,
   voiceSpeechRoute,
+  voiceTranscriptionTokenRoute,
   type SpeechAdapter,
+  type TranscriptionTokenAdapter,
   type VoiceRouteContext,
 } from './voice-routes';
 
@@ -31,9 +35,13 @@ function context(body?: unknown): { c: VoiceRouteContext; response: () => Respon
 }
 
 describe('voice route wiring', () => {
-  it('registers same-origin capability and bounded speech endpoints', () => {
+  it('registers same-origin capability, speech, and transcription-token endpoints', () => {
     expect(voiceCapabilitiesRoute).toMatchObject({ path: '/voice/capabilities', method: 'GET' });
     expect(voiceSpeechRoute).toMatchObject({ path: '/voice/speech', method: 'POST' });
+    expect(voiceTranscriptionTokenRoute).toMatchObject({
+      path: '/voice/transcription-token',
+      method: 'POST',
+    });
     expect(voiceSpeechRoute.middleware).toBeDefined();
   });
 });
@@ -60,18 +68,71 @@ describe('voice speech body limit', () => {
 });
 
 describe('voice capability handler', () => {
-  it('reports only whether question speech is available', async () => {
+  it('reports speech and transcription readiness independently', async () => {
     const enabled = context();
-    createVoiceCapabilitiesHandler({ speechAvailable: true })(enabled.c);
+    createVoiceCapabilitiesHandler({ speechAvailable: true, transcriptionAvailable: false })(
+      enabled.c,
+    );
 
     expect(enabled.response()?.status).toBe(200);
     const enabledBody = (await enabled.response()?.json()) as unknown;
-    expect(enabledBody).toEqual({ speech: true });
+    expect(enabledBody).toEqual({ speech: true, transcription: false });
     expect(JSON.stringify(enabledBody)).not.toContain('secret-key');
 
-    const disabled = context();
-    createVoiceCapabilitiesHandler({ speechAvailable: false })(disabled.c);
-    expect((await disabled.response()?.json()) as unknown).toEqual({ speech: false });
+    const inverse = context();
+    createVoiceCapabilitiesHandler({ speechAvailable: false, transcriptionAvailable: true })(
+      inverse.c,
+    );
+    expect((await inverse.response()?.json()) as unknown).toEqual({
+      speech: false,
+      transcription: true,
+    });
+  });
+});
+
+describe('voice transcription token handler', () => {
+  it('returns one no-store token and does not disclose the server key', async () => {
+    const adapter: TranscriptionTokenAdapter = {
+      create: vi.fn(async () => 'sutkn_one-use'),
+    };
+    const request = context();
+
+    const response = await createTranscriptionTokenHandler({ adapter })(request.c);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({ token: 'sutkn_one-use' });
+  });
+
+  it('maps unavailable, upstream, and timeout failures without provider details', async () => {
+    const cases = [
+      { adapter: undefined, status: 503 },
+      {
+        adapter: {
+          create: vi.fn(async () => {
+            throw new TranscriptionTokenProviderError('server-secret was rejected', 'upstream');
+          }),
+        },
+        status: 502,
+      },
+      {
+        adapter: {
+          create: vi.fn(async () => {
+            throw new TranscriptionTokenProviderError('provider timed out', 'timeout');
+          }),
+        },
+        status: 504,
+      },
+    ] satisfies { adapter: TranscriptionTokenAdapter | undefined; status: number }[];
+
+    for (const testCase of cases) {
+      const request = context();
+      await createTranscriptionTokenHandler({ adapter: testCase.adapter })(request.c);
+      expect(request.response()?.status).toBe(testCase.status);
+      const body = (await request.response()?.json()) as unknown;
+      expect(body).toEqual({ error: 'Dictation is unavailable.' });
+      expect(JSON.stringify(body)).not.toContain('server-secret');
+    }
   });
 });
 
